@@ -3862,6 +3862,17 @@ public class RoomServer : GameServer
         int skill = req.SkillID;
         if (skill >= 8 && skill <= 13) skill -= 7;   // PVP variant -> base skill id
         int cost = SkillSpCost(skill);
+        var now = DateTime.UtcNow;
+
+        if (skill == 5 && now < caster.KatyushaCdUntil)
+        {
+            session.Send(new PK_RC_PVE_SkillReply
+            {
+                IsExecute = req.IsExecute, SkillID = req.SkillID,
+                RequestResult = 3 /* InCD */, CostType = req.CostType, fParam1 = req.Parameter1,
+            });
+            return;
+        }
 
         // AIM phase (IsExecute<=0): ALWAYS reply OK so the client opens the god-view /
         // aiming reticle (Katyusha). Don't charge here — charge on execute.
@@ -3892,6 +3903,8 @@ public class RoomServer : GameServer
             IsExecute = req.IsExecute, SkillID = req.SkillID,
             RequestResult = 1 /* OK */, CostType = req.CostType, fParam1 = req.Parameter1,
         });
+        if (skill == 5)
+            caster.KatyushaCdUntil = now.AddSeconds(KatyushaCooldownSeconds);
         if (usedFreeBomber) caster.FreeBomberLeft--;
         else if (usedFreeKatyusha) caster.FreeKatyushaLeft--;
         else
@@ -4008,15 +4021,15 @@ public class RoomServer : GameServer
         _ => 0,
     };
 
+    private const int KatyushaCooldownSeconds = 60;
+    private const float KatyushaTotalHpFraction = 0.10f; // ~10% of target MaxHp across full 8-rocket volley
+
     // Katyusha: instead of one big instant hit, fire a volley — each rocket lands
-    // slightly scattered around the aim over ~1.6s and deals its own damage, so HP
-    // drops rocket-by-rocket (and SP ticks up per rocket) instead of one 5000 chunk.
+    // slightly scattered around the aim over ~1.6s and deals ~1.25% of target MaxHp
+    // per rocket (~10% total across 8 rockets), so it works proportionally in Defense & Generals.
     private void FireKatyusha(BattleRoom room, RoomPlayer caster, float cx, float cz)
     {
         const int rockets = 8;
-        // Base 650 per rocket. "Система
-        // арт.корректировки" (defense equip) uplifts the caster's Katyusha damage.
-        int perRocket = (int)MathF.Round(650 * caster.KatyushaDamageMult);
         ThreadPool.QueueUserWorkItem(_ =>
         {
             for (int i = 0; i < rockets; i++)
@@ -4024,13 +4037,17 @@ public class RoomServer : GameServer
                 if (room.BattleEnded) return;
                 float rx = cx + (float)(_random.NextDouble() * 24 - 12);
                 float rz = cz + (float)(_random.NextDouble() * 24 - 12);
-                ApplyAreaStrike(room, caster, rx, rz, 20f, perRocket);
+                ApplyAreaStrike(room, caster, rx, rz, 20f, target =>
+                    Math.Max(1, (int)MathF.Round(target.MaxHp * KatyushaTotalHpFraction / rockets * caster.KatyushaDamageMult)));
                 Thread.Sleep(200);
             }
         });
     }
 
     private void ApplyAreaStrike(BattleRoom room, RoomPlayer caster, float cx, float cz, float radius, int damage)
+        => ApplyAreaStrike(room, caster, cx, cz, radius, _ => damage);
+
+    private void ApplyAreaStrike(BattleRoom room, RoomPlayer caster, float cx, float cz, float radius, Func<RoomPlayer, int> getDamage)
     {
         float r2 = radius * radius;
         int hits = 0;
@@ -4039,6 +4056,7 @@ public class RoomServer : GameServer
             float dx = t.PosX - cx, dz = t.PosZ - cz;
             if (dx * dx + dz * dz > r2) continue;
             hits++;
+            int damage = Math.Max(1, getDamage(t));
             // Route through the shell resolver so HP-sync, the death packet, kill-feed
             // and scoring all fire (previously we only sent SynHP, so kills never
             // registered and the "dead" bot lingered/teleported on the client).
@@ -8025,7 +8043,7 @@ public class RoomServer : GameServer
                 MapId      = room.MapId,
                 ModeWire   = (byte)room.GameMode,
                 Result     = (byte)(result == 2 ? 2 : (isWin ? 1 : 0)),
-                LiveState  = (byte)(p.IsDead ? 0 : 1),
+                LiveState  = (byte)(p.IsDead ? 1 : 0), // 0 = выжил (battle_statistics_14), 1 = уничтожен (battle_statistics_06)
                 StartUnix  = room.StartedUnix > 0 ? room.StartedUnix : (int)DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
                 Money      = gross,
                 Exp        = exp,
@@ -8613,6 +8631,7 @@ public class RoomPlayer
     public int      SpSpent            { get; set; }   // потрачено очков (SP)
     public int      FreeBomberLeft     { get; set; } = 1;
     public int      FreeKatyushaLeft   { get; set; } = 1;
+    public DateTime KatyushaCdUntil    { get; set; }
     public int      ReviveCount        { get; set; }   // возрождений
     public int[]    SkillUseCount      { get; } = new int[8]; // индекс = базовый id скилла 1..7
     public HashSet<long> DamagedEnemyGuids { get; } = new(); // «повреждено врагов»

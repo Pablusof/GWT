@@ -2918,7 +2918,7 @@ public class PK_HC_BattleEndInfo : BaseRequest
     public float[] VipMoneyMultiple = { 1.5f, 1.51f, 1.52f, 1.53f };
     public byte  HasBehave;
     public float ExpMultiple = 1f, MoneyMultiple = 1f;
-    public byte  State = 1;        // 1 = танк уцелел
+    public byte  State = 0;        // 0 = выжил (Survived), 1 = уничтожен (Died)
     public byte  Result;           // 1=победа, 0=поражение, 2=ничья
     public byte  EndReason;
     public int   StartSecond;      // unix-время старта (клиент форматирует дату)
