@@ -1,0 +1,696 @@
+{
+ "_comment": "РЕАЛЬНАЯ таблица из level0 (68 строк). Главный приз (id=1) и витрина синхронны; ротируются rotate_showcase.py по списку 8 танков. Сервер выдаёт главный приз из строки reward_level=1.",
+ "Bonusboxes": [
+  {
+   "Id": 1,
+   "RewardLevel": 1,
+   "DropRate": 0,
+   "MinValue": 48000,
+   "MaxValue": 160000,
+   "RewardItemType": 4,
+   "RewardItemId": 197,
+   "RewardItemCount": -1
+  },
+  {
+   "Id": 2,
+   "RewardLevel": 2,
+   "DropRate": 395,
+   "MinValue": 5400,
+   "MaxValue": 6300,
+   "RewardItemType": 4,
+   "RewardItemId": 84,
+   "RewardItemCount": 7
+  },
+  {
+   "Id": 3,
+   "RewardLevel": 2,
+   "DropRate": 400,
+   "MinValue": 5400,
+   "MaxValue": 6300,
+   "RewardItemType": 4,
+   "RewardItemId": 86,
+   "RewardItemCount": 7
+  },
+  {
+   "Id": 4,
+   "RewardLevel": 2,
+   "DropRate": 415,
+   "MinValue": 5400,
+   "MaxValue": 6300,
+   "RewardItemType": 4,
+   "RewardItemId": 172,
+   "RewardItemCount": 7
+  },
+  {
+   "Id": 5,
+   "RewardLevel": 2,
+   "DropRate": 400,
+   "MinValue": 5400,
+   "MaxValue": 6300,
+   "RewardItemType": 4,
+   "RewardItemId": 88,
+   "RewardItemCount": 7
+  },
+  {
+   "Id": 6,
+   "RewardLevel": 2,
+   "DropRate": 371,
+   "MinValue": 5400,
+   "MaxValue": 6300,
+   "RewardItemType": 4,
+   "RewardItemId": 90,
+   "RewardItemCount": 7
+  },
+  {
+   "Id": 7,
+   "RewardLevel": 2,
+   "DropRate": 424,
+   "MinValue": 5400,
+   "MaxValue": 6300,
+   "RewardItemType": 4,
+   "RewardItemId": 85,
+   "RewardItemCount": 7
+  },
+  {
+   "Id": 8,
+   "RewardLevel": 2,
+   "DropRate": 450,
+   "MinValue": 5400,
+   "MaxValue": 6300,
+   "RewardItemType": 4,
+   "RewardItemId": 152,
+   "RewardItemCount": 7
+  },
+  {
+   "Id": 9,
+   "RewardLevel": 2,
+   "DropRate": 450,
+   "MinValue": 5400,
+   "MaxValue": 6300,
+   "RewardItemType": 4,
+   "RewardItemId": 118,
+   "RewardItemCount": 7
+  },
+  {
+   "Id": 10,
+   "RewardLevel": 2,
+   "DropRate": 450,
+   "MinValue": 5400,
+   "MaxValue": 6300,
+   "RewardItemType": 4,
+   "RewardItemId": 150,
+   "RewardItemCount": 7
+  },
+  {
+   "Id": 11,
+   "RewardLevel": 2,
+   "DropRate": 448,
+   "MinValue": 5400,
+   "MaxValue": 6300,
+   "RewardItemType": 4,
+   "RewardItemId": 89,
+   "RewardItemCount": 7
+  },
+  {
+   "Id": 12,
+   "RewardLevel": 2,
+   "DropRate": 450,
+   "MinValue": 5400,
+   "MaxValue": 6300,
+   "RewardItemType": 4,
+   "RewardItemId": 116,
+   "RewardItemCount": 7
+  },
+  {
+   "Id": 13,
+   "RewardLevel": 2,
+   "DropRate": 270,
+   "MinValue": 5400,
+   "MaxValue": 6300,
+   "RewardItemType": 4,
+   "RewardItemId": 45,
+   "RewardItemCount": 7
+  },
+  {
+   "Id": 14,
+   "RewardLevel": 2,
+   "DropRate": 200,
+   "MinValue": 5400,
+   "MaxValue": 6300,
+   "RewardItemType": 4,
+   "RewardItemId": 127,
+   "RewardItemCount": 7
+  },
+  {
+   "Id": 15,
+   "RewardLevel": 2,
+   "DropRate": 200,
+   "MinValue": 5400,
+   "MaxValue": 6300,
+   "RewardItemType": 4,
+   "RewardItemId": 143,
+   "RewardItemCount": 7
+  },
+  {
+   "Id": 16,
+   "RewardLevel": 2,
+   "DropRate": 200,
+   "MinValue": 5400,
+   "MaxValue": 6300,
+   "RewardItemType": 4,
+   "RewardItemId": 173,
+   "RewardItemCount": 7
+  },
+  {
+   "Id": 17,
+   "RewardLevel": 2,
+   "DropRate": 200,
+   "MinValue": 5400,
+   "MaxValue": 6300,
+   "RewardItemType": 4,
+   "RewardItemId": 165,
+   "RewardItemCount": 7
+  },
+  {
+   "Id": 18,
+   "RewardLevel": 2,
+   "DropRate": 240,
+   "MinValue": 5400,
+   "MaxValue": 6300,
+   "RewardItemType": 4,
+   "RewardItemId": 104,
+   "RewardItemCount": 7
+  },
+  {
+   "Id": 19,
+   "RewardLevel": 2,
+   "DropRate": 250,
+   "MinValue": 5400,
+   "MaxValue": 6300,
+   "RewardItemType": 4,
+   "RewardItemId": 97,
+   "RewardItemCount": 7
+  },
+  {
+   "Id": 20,
+   "RewardLevel": 2,
+   "DropRate": 250,
+   "MinValue": 5400,
+   "MaxValue": 6300,
+   "RewardItemType": 4,
+   "RewardItemId": 115,
+   "RewardItemCount": 7
+  },
+  {
+   "Id": 21,
+   "RewardLevel": 2,
+   "DropRate": 240,
+   "MinValue": 5400,
+   "MaxValue": 6300,
+   "RewardItemType": 4,
+   "RewardItemId": 162,
+   "RewardItemCount": 7
+  },
+  {
+   "Id": 22,
+   "RewardLevel": 2,
+   "DropRate": 250,
+   "MinValue": 5400,
+   "MaxValue": 6300,
+   "RewardItemType": 4,
+   "RewardItemId": 171,
+   "RewardItemCount": 7
+  },
+  {
+   "Id": 23,
+   "RewardLevel": 2,
+   "DropRate": 280,
+   "MinValue": 5400,
+   "MaxValue": 6300,
+   "RewardItemType": 4,
+   "RewardItemId": 153,
+   "RewardItemCount": 7
+  },
+  {
+   "Id": 24,
+   "RewardLevel": 2,
+   "DropRate": 224,
+   "MinValue": 5400,
+   "MaxValue": 6300,
+   "RewardItemType": 4,
+   "RewardItemId": 98,
+   "RewardItemCount": 7
+  },
+  {
+   "Id": 25,
+   "RewardLevel": 2,
+   "DropRate": 245,
+   "MinValue": 5400,
+   "MaxValue": 6300,
+   "RewardItemType": 4,
+   "RewardItemId": 120,
+   "RewardItemCount": 7
+  },
+  {
+   "Id": 26,
+   "RewardLevel": 2,
+   "DropRate": 267,
+   "MinValue": 5400,
+   "MaxValue": 6300,
+   "RewardItemType": 4,
+   "RewardItemId": 151,
+   "RewardItemCount": 7
+  },
+  {
+   "Id": 27,
+   "RewardLevel": 2,
+   "DropRate": 291,
+   "MinValue": 5400,
+   "MaxValue": 6300,
+   "RewardItemType": 4,
+   "RewardItemId": 126,
+   "RewardItemCount": 7
+  },
+  {
+   "Id": 28,
+   "RewardLevel": 2,
+   "DropRate": 300,
+   "MinValue": 5400,
+   "MaxValue": 6300,
+   "RewardItemType": 4,
+   "RewardItemId": 167,
+   "RewardItemCount": 7
+  },
+  {
+   "Id": 29,
+   "RewardLevel": 2,
+   "DropRate": 300,
+   "MinValue": 5400,
+   "MaxValue": 6300,
+   "RewardItemType": 4,
+   "RewardItemId": 169,
+   "RewardItemCount": 7
+  },
+  {
+   "Id": 30,
+   "RewardLevel": 2,
+   "DropRate": 190,
+   "MinValue": 5400,
+   "MaxValue": 6300,
+   "RewardItemType": 4,
+   "RewardItemId": 164,
+   "RewardItemCount": 7
+  },
+  {
+   "Id": 31,
+   "RewardLevel": 2,
+   "DropRate": 190,
+   "MinValue": 5400,
+   "MaxValue": 6300,
+   "RewardItemType": 4,
+   "RewardItemId": 154,
+   "RewardItemCount": 7
+  },
+  {
+   "Id": 32,
+   "RewardLevel": 2,
+   "DropRate": 190,
+   "MinValue": 5400,
+   "MaxValue": 6300,
+   "RewardItemType": 4,
+   "RewardItemId": 166,
+   "RewardItemCount": 7
+  },
+  {
+   "Id": 33,
+   "RewardLevel": 2,
+   "DropRate": 190,
+   "MinValue": 5400,
+   "MaxValue": 6300,
+   "RewardItemType": 4,
+   "RewardItemId": 170,
+   "RewardItemCount": 7
+  },
+  {
+   "Id": 34,
+   "RewardLevel": 2,
+   "DropRate": 190,
+   "MinValue": 5400,
+   "MaxValue": 6300,
+   "RewardItemType": 4,
+   "RewardItemId": 119,
+   "RewardItemCount": 7
+  },
+  {
+   "Id": 35,
+   "RewardLevel": 2,
+   "DropRate": 190,
+   "MinValue": 5400,
+   "MaxValue": 6300,
+   "RewardItemType": 4,
+   "RewardItemId": 149,
+   "RewardItemCount": 7
+  },
+  {
+   "Id": 36,
+   "RewardLevel": 3,
+   "DropRate": 410,
+   "MinValue": 200,
+   "MaxValue": 0,
+   "RewardItemType": 6,
+   "RewardItemId": 6,
+   "RewardItemCount": 4
+  },
+  {
+   "Id": 37,
+   "RewardLevel": 3,
+   "DropRate": 270,
+   "MinValue": 240,
+   "MaxValue": 0,
+   "RewardItemType": 6,
+   "RewardItemId": 1,
+   "RewardItemCount": 40
+  },
+  {
+   "Id": 38,
+   "RewardLevel": 3,
+   "DropRate": 270,
+   "MinValue": 240,
+   "MaxValue": 0,
+   "RewardItemType": 6,
+   "RewardItemId": 2,
+   "RewardItemCount": 40
+  },
+  {
+   "Id": 39,
+   "RewardLevel": 3,
+   "DropRate": 410,
+   "MinValue": 200,
+   "MaxValue": 0,
+   "RewardItemType": 6,
+   "RewardItemId": 3,
+   "RewardItemCount": 4
+  },
+  {
+   "Id": 40,
+   "RewardLevel": 3,
+   "DropRate": 410,
+   "MinValue": 200,
+   "MaxValue": 0,
+   "RewardItemType": 6,
+   "RewardItemId": 4,
+   "RewardItemCount": 4
+  },
+  {
+   "Id": 41,
+   "RewardLevel": 3,
+   "DropRate": 410,
+   "MinValue": 200,
+   "MaxValue": 0,
+   "RewardItemType": 6,
+   "RewardItemId": 5,
+   "RewardItemCount": 1
+  },
+  {
+   "Id": 42,
+   "RewardLevel": 3,
+   "DropRate": 200,
+   "MinValue": 300,
+   "MaxValue": 0,
+   "RewardItemType": 6,
+   "RewardItemId": 7,
+   "RewardItemCount": 1
+  },
+  {
+   "Id": 43,
+   "RewardLevel": 3,
+   "DropRate": 1400,
+   "MinValue": 250,
+   "MaxValue": 0,
+   "RewardItemType": 1,
+   "RewardItemId": 0,
+   "RewardItemCount": 2500
+  },
+  {
+   "Id": 44,
+   "RewardLevel": 3,
+   "DropRate": 390,
+   "MinValue": 300,
+   "MaxValue": 0,
+   "RewardItemType": 2,
+   "RewardItemId": 0,
+   "RewardItemCount": 150000
+  },
+  {
+   "Id": 45,
+   "RewardLevel": 3,
+   "DropRate": 1640,
+   "MinValue": 200,
+   "MaxValue": 0,
+   "RewardItemType": 2,
+   "RewardItemId": 0,
+   "RewardItemCount": 100000
+  },
+  {
+   "Id": 46,
+   "RewardLevel": 3,
+   "DropRate": 200,
+   "MinValue": 300,
+   "MaxValue": 0,
+   "RewardItemType": 8,
+   "RewardItemId": 7,
+   "RewardItemCount": 1
+  },
+  {
+   "Id": 47,
+   "RewardLevel": 3,
+   "DropRate": 200,
+   "MinValue": 300,
+   "MaxValue": 0,
+   "RewardItemType": 8,
+   "RewardItemId": 10,
+   "RewardItemCount": 1
+  },
+  {
+   "Id": 48,
+   "RewardLevel": 3,
+   "DropRate": 200,
+   "MinValue": 300,
+   "MaxValue": 0,
+   "RewardItemType": 8,
+   "RewardItemId": 13,
+   "RewardItemCount": 1
+  },
+  {
+   "Id": 49,
+   "RewardLevel": 3,
+   "DropRate": 200,
+   "MinValue": 300,
+   "MaxValue": 0,
+   "RewardItemType": 8,
+   "RewardItemId": 16,
+   "RewardItemCount": 1
+  },
+  {
+   "Id": 50,
+   "RewardLevel": 3,
+   "DropRate": 200,
+   "MinValue": 300,
+   "MaxValue": 0,
+   "RewardItemType": 8,
+   "RewardItemId": 19,
+   "RewardItemCount": 1
+  },
+  {
+   "Id": 51,
+   "RewardLevel": 3,
+   "DropRate": 100,
+   "MinValue": 500,
+   "MaxValue": 0,
+   "RewardItemType": 3,
+   "RewardItemId": 0,
+   "RewardItemCount": 500
+  },
+  {
+   "Id": 52,
+   "RewardLevel": 3,
+   "DropRate": 500,
+   "MinValue": 250,
+   "MaxValue": 0,
+   "RewardItemType": 2,
+   "RewardItemId": 0,
+   "RewardItemCount": 125000
+  },
+  {
+   "Id": 53,
+   "RewardLevel": 3,
+   "DropRate": 100,
+   "MinValue": 600,
+   "MaxValue": 0,
+   "RewardItemType": 5,
+   "RewardItemId": 5,
+   "RewardItemCount": 5
+  },
+  {
+   "Id": 54,
+   "RewardLevel": 3,
+   "DropRate": 50,
+   "MinValue": 1200,
+   "MaxValue": 0,
+   "RewardItemType": 5,
+   "RewardItemId": 4,
+   "RewardItemCount": 4
+  },
+  {
+   "Id": 55,
+   "RewardLevel": 3,
+   "DropRate": 50,
+   "MinValue": 1000,
+   "MaxValue": 0,
+   "RewardItemType": 7,
+   "RewardItemId": 4,
+   "RewardItemCount": 1
+  },
+  {
+   "Id": 56,
+   "RewardLevel": 3,
+   "DropRate": 50,
+   "MinValue": 1000,
+   "MaxValue": 0,
+   "RewardItemType": 7,
+   "RewardItemId": 8,
+   "RewardItemCount": 1
+  },
+  {
+   "Id": 57,
+   "RewardLevel": 3,
+   "DropRate": 50,
+   "MinValue": 1000,
+   "MaxValue": 0,
+   "RewardItemType": 7,
+   "RewardItemId": 13,
+   "RewardItemCount": 1
+  },
+  {
+   "Id": 58,
+   "RewardLevel": 3,
+   "DropRate": 50,
+   "MinValue": 1000,
+   "MaxValue": 0,
+   "RewardItemType": 9,
+   "RewardItemId": 1,
+   "RewardItemCount": 1
+  },
+  {
+   "Id": 59,
+   "RewardLevel": 3,
+   "DropRate": 50,
+   "MinValue": 1000,
+   "MaxValue": 0,
+   "RewardItemType": 9,
+   "RewardItemId": 2,
+   "RewardItemCount": 1
+  },
+  {
+   "Id": 60,
+   "RewardLevel": 3,
+   "DropRate": 50,
+   "MinValue": 1000,
+   "MaxValue": 0,
+   "RewardItemType": 9,
+   "RewardItemId": 3,
+   "RewardItemCount": 1
+  },
+  {
+   "Id": 61,
+   "RewardLevel": 3,
+   "DropRate": 50,
+   "MinValue": 1000,
+   "MaxValue": 0,
+   "RewardItemType": 9,
+   "RewardItemId": 4,
+   "RewardItemCount": 1
+  },
+  {
+   "Id": 62,
+   "RewardLevel": 3,
+   "DropRate": 50,
+   "MinValue": 1000,
+   "MaxValue": 0,
+   "RewardItemType": 9,
+   "RewardItemId": 5,
+   "RewardItemCount": 1
+  },
+  {
+   "Id": 63,
+   "RewardLevel": 3,
+   "DropRate": 1640,
+   "MinValue": 200,
+   "MaxValue": 0,
+   "RewardItemType": 1,
+   "RewardItemId": 0,
+   "RewardItemCount": 2000
+  },
+  {
+   "Id": 64,
+   "RewardLevel": 3,
+   "DropRate": 100,
+   "MinValue": 600,
+   "MaxValue": 0,
+   "RewardItemType": 8,
+   "RewardItemId": 23,
+   "RewardItemCount": 1
+  },
+  {
+   "Id": 65,
+   "RewardLevel": 3,
+   "DropRate": 100,
+   "MinValue": 600,
+   "MaxValue": 0,
+   "RewardItemType": 8,
+   "RewardItemId": 26,
+   "RewardItemCount": 1
+  },
+  {
+   "Id": 66,
+   "RewardLevel": 3,
+   "DropRate": 100,
+   "MinValue": 600,
+   "MaxValue": 0,
+   "RewardItemType": 8,
+   "RewardItemId": 32,
+   "RewardItemCount": 1
+  },
+  {
+   "Id": 67,
+   "RewardLevel": 3,
+   "DropRate": 50,
+   "MinValue": 1000,
+   "MaxValue": 0,
+   "RewardItemType": 8,
+   "RewardItemId": 36,
+   "RewardItemCount": 1
+  },
+  {
+   "Id": 68,
+   "RewardLevel": 3,
+   "DropRate": 50,
+   "MinValue": 1000,
+   "MaxValue": 0,
+   "RewardItemType": 8,
+   "RewardItemId": 39,
+   "RewardItemCount": 1
+  }
+ ],
+ "PowerRewards": [
+  {
+   "Id": 1,
+   "ActiveRatio": 100,
+   "RewardType": 4,
+   "RewardCount": 1,
+   "RewardDiscount": 0,
+   "RewardId": 197,
+   "RewardGoldValue": 68000
+  }
+ ]
+}

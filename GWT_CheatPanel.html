@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>GWT Admin — Чит Меню</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Segoe UI',Arial,sans-serif;background:#1a1a2e;color:#e0e0e0;min-height:100vh;padding:20px}
+h1{text-align:center;font-size:22px;font-weight:600;color:#c8a96e;margin-bottom:4px}
+.sub{text-align:center;font-size:12px;color:#555;margin-bottom:16px}
+.status{display:flex;align-items:center;justify-content:center;gap:8px;padding:7px 16px;background:#111;border-radius:8px;font-size:13px;margin-bottom:16px;max-width:700px;margin-left:auto;margin-right:auto}
+.dot{width:10px;height:10px;border-radius:50%;background:#555}.dot.ok{background:#4caf50}.dot.err{background:#f44336}
+.wrap{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;max-width:900px;margin:0 auto}
+.card{background:#16213e;border:1px solid #2a2a5a;border-radius:10px;padding:14px}
+.title{font-size:12px;font-weight:600;color:#c8a96e;text-transform:uppercase;letter-spacing:1px;border-bottom:1px solid #2a2a5a;padding-bottom:7px;margin-bottom:10px}
+.row{display:flex;gap:7px;align-items:center;margin-bottom:7px}
+label{font-size:12px;color:#888;min-width:80px;flex-shrink:0}
+input[type=text],input[type=number],select{flex:1;background:#0f0f23;border:1px solid #2a2a5a;border-radius:6px;color:#e0e0e0;padding:5px 9px;font-size:13px;outline:none}
+input:focus,select:focus{border-color:#c8a96e}
+button{padding:6px 13px;border-radius:6px;border:1px solid #2a2a5a;cursor:pointer;font-size:12px;font-weight:500;transition:.12s;color:#e0e0e0;background:transparent}
+button:hover{opacity:.85}
+.bp{background:#c8a96e;color:#1a1a2e;border-color:#c8a96e}
+.bd{background:#8b2020;color:#ffc;border-color:#8b2020}
+.bi{background:#1e5799;color:#fff;border-color:#1e5799}
+.log{font-size:12px;min-height:17px;margin-top:5px;padding:4px 8px;background:#0a0a1a;border-radius:4px;color:#666;border-left:2px solid #2a2a5a}
+.log.ok{color:#4caf50;border-color:#4caf50}.log.err{color:#f44336;border-color:#f44336}
+.section{font-size:10px;color:#555;text-transform:uppercase;letter-spacing:1px;margin:8px 0 4px}
+.tg{display:grid;grid-template-columns:1fr 1fr;gap:5px;max-height:250px;overflow-y:auto;padding-right:3px}
+.tb{background:#0f0f23;border:1px solid #2a2a5a;border-radius:6px;color:#bbb;padding:5px 9px;font-size:11px;text-align:left;cursor:pointer;transition:.12s}
+.tb:hover{border-color:#c8a96e;color:#c8a96e}
+.tb .t{color:#666;font-size:10px}
+.flog{background:#0a0a1a;border:1px solid #2a2a5a;border-radius:6px;padding:7px 11px;font-size:12px;font-family:Consolas,monospace;max-height:130px;overflow-y:auto;color:#666}
+.flog .e{margin-bottom:3px}.flog .ok{color:#4caf50}.flog .err{color:#f44336}
+.brow{display:flex;gap:6px;flex-wrap:wrap;margin-top:7px}
+.span2{grid-column:span 2}
+</style>
+</head>
+<body>
+
+<h1>⚙ GWT ADMIN PANEL</h1>
+<p class="sub">Ground War Tanks Emulator — Чит Меню | Сервер должен быть запущен</p>
+
+<div class="status">
+  <div class="dot" id="dot"></div>
+  <span id="stxt">Проверка соединения...</span>
+  <span style="color:#444;font-size:11px">http://127.0.0.1:18080/admin</span>
+</div>
+
+<div class="wrap">
+
+  <div class="card">
+    <div class="title">🎯 Игрок</div>
+    <div class="row">
+      <label>Имя</label>
+      <input type="text" id="pn" value="Player 12345">
+      <button class="bi" onclick="getInfo()">Проверить</button>
+    </div>
+    <div class="log" id="logInfo">Введите имя игрока из игры</div>
+  </div>
+
+  <div class="card">
+    <div class="title">💰 Валюта</div>
+    <div class="row"><label>Золото</label><input type="number" id="g" value="500000000"><button class="bp" onclick="cmd('set_gold',{amount:+q('g')},'lc')">Дать</button></div>
+    <div class="row"><label>Серебро</label><input type="number" id="s" value="999999999"><button class="bp" onclick="cmd('set_silver',{amount:+q('s')},'lc')">Дать</button></div>
+    <div class="row"><label>Св.опыт</label><input type="number" id="e" value="999999999"><button class="bp" onclick="cmd('set_exp',{amount:+q('e')},'lc')">Дать</button></div>
+    <div class="row"><label>Лояльность</label><input type="number" id="l" value="10000000"><button class="bp" onclick="cmd('set_loyal',{amount:+q('l')},'lc')">Дать</button></div>
+    <div class="log" id="lc"></div>
+  </div>
+
+  <div class="card span2">
+    <div class="title">🚀 Техника</div>
+
+    <div class="section">Тир IV–VI</div>
+    <div class="tg">
+      <button class="tb" onclick="give(45,'Т-50')">Т-50 <span class="t">[IV]</span></button>
+      <button class="tb" onclick="give(199,'Super Hellcat')">Super Hellcat <span class="t">[VI]</span></button>
+      <button class="tb" onclick="give(152,'A33 Excelsior')">A33 Excelsior <span class="t">[V]</span></button>
+    </div>
+
+    <div class="section">Тир VII–VIII</div>
+    <div class="tg">
+      <button class="tb" onclick="give(165,'A30')">A30 <span class="t">[VII]</span></button>
+      <button class="tb" onclick="give(153,'AMX50 100')">AMX50 100 <span class="t">[VIII]</span></button>
+      <button class="tb" onclick="give(162,'ИС-6')">ИС-6 <span class="t">[VIII]</span></button>
+      <button class="tb" onclick="give(171,'FV221')">FV221 <span class="t">[VIII]</span></button>
+    </div>
+
+    <div class="section">Тир IX</div>
+    <div class="tg">
+      <button class="tb" onclick="give(119,'Chatillon 25t')">Chatillon 25t <span class="t">[IX]</span></button>
+      <button class="tb" onclick="give(179,'Object 263')">Object 263 <span class="t">[IX/X]</span></button>
+    </div>
+
+    <div class="section">Тир X</div>
+    <div class="tg">
+      <button class="tb" onclick="give(154,'FV4005')">FV4005 <span class="t">[X]</span></button>
+      <button class="tb" onclick="give(164,'Object 280')">Object 280 <span class="t">[X]</span></button>
+      <button class="tb" onclick="give(166,'AMX30')">AMX30 <span class="t">[X]</span></button>
+      <button class="tb" onclick="give(170,'Mars 15')">Mars 15 <span class="t">[X]</span></button>
+      <button class="tb" onclick="give(163,'FV214 Conqueror')">FV214 Conqueror <span class="t">[X]</span></button>
+      <button class="tb" onclick="give(168,'1К-17')">1К-17 <span class="t">[X]</span></button>
+      <button class="tb" onclick="give(208,'XM815 Chrysler')">XM815 Chrysler <span class="t">[X]</span></button>
+    </div>
+
+    <div class="section">Тир XI (Премиум)</div>
+    <div class="tg">
+      <button class="tb" onclick="give(197,'T95/Chieftain')">T95/Chieftain <span class="t">[XI]</span></button>
+      <button class="tb" onclick="give(201,'M60A2 Starship')">M60A2 Starship <span class="t">[XI]</span></button>
+      <button class="tb" onclick="give(200,'XM815 GM')">XM815 GM <span class="t">[XI]</span></button>
+      <button class="tb" onclick="give(175,'M60')">M60 <span class="t">[XI]</span></button>
+      <button class="tb" onclick="give(174,'FV4030/4')">FV4030/4 <span class="t">[XI]</span></button>
+      <button class="tb" onclick="give(202,'FV4030/4 F')">FV4030/4 F <span class="t">[XI]</span></button>
+      <button class="tb" onclick="give(210,'Flakpanzer E-100')">Flakpanzer E-100 <span class="t">[XI]</span></button>
+      <button class="tb" onclick="give(137,'Object 140')">Object 140 <span class="t">[XI]</span></button>
+      <button class="tb" onclick="give(204,'M60 F')">M60 F <span class="t">[XI]</span></button>
+    </div>
+
+    <div class="section" style="margin-top:10px">По VehicleId вручную</div>
+    <div class="row">
+      <label>VehicleId</label>
+      <input type="number" id="vid" value="197" style="max-width:110px">
+      <button class="bp" onclick="give(+q('vid'),'ID='+q('vid'))">Выдать</button>
+      <button class="bd" onclick="cmd('remove_tank',{vehicleId:+q('vid')},'lt')">Удалить</button>
+    </div>
+    <div class="log" id="lt"></div>
+  </div>
+
+  <div class="card span2">
+    <div class="title">📋 Журнал</div>
+    <div class="flog" id="fl"><div class="e">— ожидание команд —</div></div>
+    <div class="brow">
+      <button onclick="document.getElementById('fl').innerHTML='<div class=e>— очищено —</div>'">Очистить</button>
+      <button class="bi" onclick="getInfo()">Обновить данные</button>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const q = id => document.getElementById(id).value;
+const $ = id => document.getElementById(id);
+const P = () => q('pn') || 'Player 12345';
+
+function flog(msg, ok) {
+  const el = $('fl');
+  const cls = ok===true?'ok':ok===false?'err':'';
+  const ts = new Date().toLocaleTimeString();
+  el.innerHTML = `<div class="e ${cls}">[${ts}] ${msg}</div>` + el.innerHTML;
+}
+
+async function cmd(command, params, logId) {
+  const qs = new URLSearchParams({cmd:command, player:P(), ...params});
+  const el = logId ? $(logId) : null;
+  if(el){el.className='log';el.textContent='⏳';}
+  try{
+    const r = await fetch('http://127.0.0.1:18080/admin?'+qs);
+    const t = await r.text();
+    const ok = !t.startsWith('ERR:');
+    if(el){el.className='log '+(ok?'ok':'err');el.textContent=t;}
+    flog(command+': '+t, ok);
+    return t;
+  }catch(e){
+    const m = '⚠ Нет связи — запустите сервер!';
+    if(el){el.className='log err';el.textContent=m;}
+    flog(m, false);
+    return null;
+  }
+}
+
+function give(vid, name){
+  cmd('give_tank',{vehicleId:vid},'lt');
+}
+
+async function getInfo(){
+  const r = await cmd('get_info',{},'logInfo');
+  if(r&&!r.startsWith('ERR:')){
+    $('dot').className='dot ok';
+    $('stxt').textContent='Сервер запущен ✓  |  '+r;
+  }
+}
+
+async function ping(){
+  try{
+    const r = await fetch('http://127.0.0.1:18080/admin?cmd=get_info&player='+encodeURIComponent(P()));
+    const t = await r.text();
+    const ok = !t.startsWith('ERR:');
+    $('dot').className='dot '+(ok?'ok':'err');
+    $('stxt').textContent = ok ? 'Сервер запущен ✓' : 'Сервер недоступен: '+t;
+  }catch{$('dot').className='dot err';$('stxt').textContent='Нет соединения с сервером';}
+}
+
+window.onload=ping;
+setInterval(ping,5000);
+</script>
+</body>
+</html>

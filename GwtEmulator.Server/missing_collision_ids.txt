@@ -1,0 +1,124 @@
+Список model-id, для которых нужны _pz меши коллизии, по картам ротации.
+id = число в ModelGroup.Name ('kind_ID_имя'). Выгрузи _pz этих id из пер-картовых
+бандлов CollisionModelData, добавь в collision_shapes_by_id.json, прогони build_boxes.py.
+
+map1_Moscow (New Terrain_5)  (MapData_9)
+  уже есть меши коллизии: 0 типов -> нет боксов
+  НУЖНО выгрузить _pz для 48 типов (id: имя, инстансов):
+      17070  weiqiang01             x51
+      17077  zhalan01               x37
+      17066  shidun01               x37
+      17029  chewei03               x31
+      17054  kache                  x26
+      17057  langan01               x20
+      17039  deng01                 x18
+      17071  xiangzi01              x17
+      17069  tong01                 x16
+      17072  xiangzi02              x15
+      17043  fangzi04               x13
+      17050  huatan02               x12
+      17074  xiangzi04              x11
+      17055  lajitong01             x9
+      17056  lajitong02             x7
+      17047  guanmu01               x7
+      17063  pengzi01               x4
+      17040  fangzi01               x4
+      17075  xiangzi05              x3
+      17064  pengzi02               x3
+      17046  gaoshilan              x3
+      17052  jiazi02                x3
+      17034  chewei08               x3
+      17041  fangzi02               x3
+      17053  jiazi03                x2
+      17044  fangzi05               x2
+      17045  fangzi06               x2
+      17042  fangzi03               x2
+      17035  chewei09               x1
+      17059  lubiao                 x1
+      17033  chewei07               x1
+      17026  02                     x1
+      17025  01                     x1
+      17038  damen01                x1
+      17060  luji01                 x1
+      17036  chewei10               x1
+      17062  luji03                 x1
+      17027  chewei01               x1
+      17061  luji02                 x1
+      17065  qiao                   x0
+
+map2_Caucasus (New Terrain_6)  (MapData_22)
+  уже есть меши коллизии: 17 типов -> боксы строятся
+  НУЖНО выгрузить _pz для 43 типов (id: имя, инстансов):
+       8026  guanmu                 x158
+       8028  zhalan                 x68
+       8069  shu                    x66
+       8016  shu                    x55
+       8025  shu                    x53
+       8046  zhalan                 x41
+       8059  zhalan                 x38
+       8027  guanmu                 x33
+       8053  zhalan                 x26
+       8011  qiang                  x25
+       8031  dianxiangan            x18
+       8051  shitou                 x14
+       8055  shi                    x13
+       8057  shi                    x12
+       8062  shi                    x11
+       8018  qiang                  x10
+       8070  hulan                  x8
+       8056  shi                    x8
+       8015  yijia                  x6
+       8074  shu                    x6
+       8071  hulan                  x6
+       8035  caoduo                 x5
+       8072  shu                    x5
+       8050  caoduo                 x4
+       8052  shitou                 x4
+       8079  zudang_2               x4
+       8037  shi                    x3
+       8014  yijia                  x2
+       8029  tuolaji                x2
+       8019  qiang                  x2
+       8078  zudang                 x2
+       8076  fengche                x1
+        256  caucasia_feiniao_jihe2 x1
+       8030  tuiche                 x1
+       8013  yijia                  x1
+       8032  mutoudui               x1
+        255  caucasia_feiniao_jihe  x1
+       8038  shi                    x1
+       8034  shu                    x1
+       8041  caoren                 x1
+
+map3_? (New Terrain_4, tentative)  (MapData_21)
+  уже есть меши коллизии: 0 типов -> нет боксов
+  НУЖНО выгрузить _pz для 29 типов (id: имя, инстансов):
+      17091  qizi1                  x6
+        359  luzi_smoke             x6
+      17095  xiangzi01              x5
+        361  cheku_dust             x4
+        360  cheku_guangshu         x4
+        363  luzi_liangang          x3
+        362  luzi_relang            x3
+        358  guandao_smoke          x2
+      17101  miehuoqi               x2
+      17089  qiang02                x1
+      17086  louti01                x1
+      17080  feitie01               x1
+      17096  xiangzi02              x0
+      17088  qiang01                x0
+      17100  xiangzi06              x0
+      17081  guanzi01               x0
+      17093  tiejiazi01             x0
+      17098  xiangzi04              x0
+      17099  xiangzi05              x0
+      17097  xiangzi03              x0
+      17079  cheku_dimian           x0
+      17094  toutie                 x0
+      17078  cheku                  x0
+      17092  sky                    x0
+      17084  liangang02             x0
+      17087  men01                  x0
+      17082  guidao                 x0
+      17085  liangang03             x0
+      17083  liangang01             x0

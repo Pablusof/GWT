@@ -1,0 +1,8 @@
+{
+  "manifestUrl": "https://your-domain-or-vps.example/gwt/manifest.json",
+  "serverHost": "your-server-ip-or-domain",
+  "gamePort": 9801,
+  "authPort": 18080,
+  "assetPort": 18081,
+  "useLocalServer": false
+}
