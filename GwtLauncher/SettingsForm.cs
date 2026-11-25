@@ -89,16 +89,26 @@ public sealed class SettingsForm : Form
         {
             AutoSize = true,
             Text = "Онлайн / Radmin VPN",
+#if PLAYER_EDITION
+            Checked = true,
+#else
             Checked = !current.UseLocalServer,
+#endif
             ForeColor = SpaceTheme.TextPrimary,
             Margin = new Padding(0, 0, 18, 0),
         };
         _localModeRadio = new RadioButton
         {
             AutoSize = true,
+#if PLAYER_EDITION
+            Visible = false,
+            Checked = false,
+            Enabled = false,
+#else
             Text = localEmulatorAvailable ? "Локальный сервер на этом ПК" : "Локальный сервер (не найден рядом)",
             Checked = current.UseLocalServer,
             Enabled = localEmulatorAvailable || current.UseLocalServer,
+#endif
             ForeColor = SpaceTheme.TextPrimary,
         };
         _onlineModeRadio.CheckedChanged += (_, _) => UpdateServerHostEnabled();

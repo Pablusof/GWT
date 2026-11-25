@@ -1,3 +1,4 @@
+#if !PLAYER_EDITION
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -402,3 +403,4 @@ public sealed class CheatPanelForm : Form
         Font = new Font("Segoe UI", 8f, FontStyle.Bold),
     };
 }
+#endif

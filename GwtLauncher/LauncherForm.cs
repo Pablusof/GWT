@@ -52,12 +52,21 @@ public sealed class LauncherForm : Form, IBackdropProvider
     private sealed record ChangelogEntry(string Version, string Date, string Badge, Color BadgeColor, string[] Bullets);
     private static readonly ChangelogEntry[] ChangelogEntries =
     {
-        new("v1.4.0", "25 ноября 2026", "ГЕЙМПЛЕЙ", SpaceTheme.AccentRedBright, new[]
+#if PLAYER_EDITION
+        new("v1.4.1", "25 ноября 2026", "ИГРОК", SpaceTheme.AccentCyan, new[]
         {
-            "Добавлена смена игрового никнейма в лаунчере с сохранением всех танков и прогресса.",
-            "Добавлена чит-панель хоста (выдача любых танков, золота, серебра, опыта, према, расходников по нику).",
+            "Отдельный клиентский лаунчер для игры по сети без локального хостинга и админ-панели.",
+            "Смена игрового никнейма прямо в настройках с сохранением всех танков и прогресса.",
             "Снижена вероятность взрыва боеукладки, повреждения модулей и сбития гусениц в бою.",
         }),
+#else
+        new("v1.4.1", "25 ноября 2026", "ХОСТ", SpaceTheme.AccentRedBright, new[]
+        {
+            "Запуск локального сервера без старта игры (1 клик) — друзья могут заходить и играть, пока вы не в бою.",
+            "Отдельный клиентский лаунчер GWT_Launcher_Player.exe для друзей (без чит-панели).",
+            "Чит-панель хоста по нику, смена ника в лаунчере и защита от случайного подрыва БК.",
+        }),
+#endif
         new("v1.3.0", "25 ноября 2026", "ЛАУНЧЕР", SpaceTheme.AccentCyan, new[]
         {
             "Новый полноэкранный Space-интерфейс в стиле SpaceRust с плавающим HUD и выдвижными настройками.",
@@ -95,9 +104,12 @@ public sealed class LauncherForm : Form, IBackdropProvider
     private float _patchesAlpha;
     private readonly System.Windows.Forms.Timer _animTimer;
 
+#if !PLAYER_EDITION
     private Process? _serverProcess;
-    private Process? _gameProcess;
     private bool _serverStartedByLauncher;
+    private bool _dedicatedServerMode;
+#endif
+    private Process? _gameProcess;
     private bool _isLaunching;
     private bool _isUpdating;
     private bool _remoteServerOnline;
@@ -137,8 +149,10 @@ public sealed class LauncherForm : Form, IBackdropProvider
 
     // Right-Side Settings Drawer
     private readonly SpaceGlassPanel _settingsDrawer;
+#if !PLAYER_EDITION
     private readonly SpaceButton _setModeOnlineBtn;
     private readonly SpaceButton _setModeLocalBtn;
+#endif
     private readonly TextBox _setServerHostBox;
     private readonly NumericUpDown _setGamePortNum;
     private readonly NumericUpDown _setAuthPortNum;
@@ -146,10 +160,13 @@ public sealed class LauncherForm : Form, IBackdropProvider
     private readonly TextBox _setNicknameBox;
     private readonly TextBox _setAccountIdBox;
     private readonly SpaceToggle _minimizeOnStartCheck;
+#if !PLAYER_EDITION
     private readonly SpaceToggle _autoStopServerCheck;
+    private readonly SpaceButton _setServerToggleBtn;
+    private readonly SpaceButton _setCheatPanelBtn;
+#endif
     private readonly TextBox _setGameDirBox;
     private readonly TextBox _setManifestUrlBox;
-    private readonly SpaceButton _setCheatPanelBtn;
     private readonly SpaceButton _setSaveBtn;
     private readonly SpaceButton _setVerifyBtn;
 
@@ -165,8 +182,12 @@ public sealed class LauncherForm : Form, IBackdropProvider
     public LauncherForm()
     {
         var (detectedGameDir, detectedEmuDir) = ResolveLocalDirectories();
+#if PLAYER_EDITION
+        _detectedEmuDir = null;
+#else
         _detectedEmuDir = detectedEmuDir;
-        _settings = LauncherSettings.Load(detectedGameDir, detectedEmuDir);
+#endif
+        _settings = LauncherSettings.Load(detectedGameDir, _detectedEmuDir);
         _backdropImage = LoadEmbeddedBannerImage();
         InitializeAnimatedBackdrop();
 
@@ -340,7 +361,7 @@ public sealed class LauncherForm : Form, IBackdropProvider
             BorderColor = SpaceTheme.BorderGlass,
             Cursor = Cursors.Hand,
         };
-        _serverPillPanel.Click += (_, _) => ToggleSettingsDrawer(true);
+        _serverPillPanel.Click += async (_, _) => await OnServerPillClickedAsync();
 
         _serverPillLabel = new Label
         {
@@ -352,8 +373,9 @@ public sealed class LauncherForm : Form, IBackdropProvider
             ForeColor = SpaceTheme.TextSecondary,
             BackColor = Color.Transparent,
             AutoEllipsis = true,
+            Cursor = Cursors.Hand,
         };
-        _serverPillLabel.Click += (_, _) => ToggleSettingsDrawer(true);
+        _serverPillLabel.Click += async (_, _) => await OnServerPillClickedAsync();
         _serverPillPanel.Controls.Add(_serverPillLabel);
 
         // ---------------- PATCHES & LOGS OVERLAY ----------------
@@ -459,6 +481,7 @@ public sealed class LauncherForm : Form, IBackdropProvider
         _settingsDrawer.Controls.Add(drawerCloseBtn);
 
         int dy = 56;
+#if !PLAYER_EDITION
         _settingsDrawer.Controls.Add(MakeDrawerSectionLabel("РЕЖИМ ПОДКЛЮЧЕНИЯ", 22, dy));
         dy += 20;
         _setModeOnlineBtn = new SpaceButton
@@ -482,8 +505,11 @@ public sealed class LauncherForm : Form, IBackdropProvider
         _setModeLocalBtn.Click += (_, _) => SetDrawerMode(useLocal: true);
         _settingsDrawer.Controls.Add(_setModeOnlineBtn);
         _settingsDrawer.Controls.Add(_setModeLocalBtn);
-
         dy += 42;
+#else
+        _settingsDrawer.Controls.Add(MakeDrawerSectionLabel("ПОДКЛЮЧЕНИЕ К СЕРВЕРУ (RADMIN / LAN)", 22, dy));
+        dy += 22;
+#endif
         _settingsDrawer.Controls.Add(MakeDrawerFieldHint("IP сервера и порты (Login / Auth / Asset):", 22, dy));
         dy += 18;
         _setServerHostBox = MakeDarkInput(_settings.ServerHost, 22, dy, 162);
@@ -523,19 +549,20 @@ public sealed class LauncherForm : Form, IBackdropProvider
             Checked = _settings.MinimizeOnStart,
         };
         _minimizeOnStartCheck.CheckedChanged += (_, _) => { _settings.MinimizeOnStart = _minimizeOnStartCheck.Checked; _settings.Save(); };
+        _settingsDrawer.Controls.Add(_minimizeOnStartCheck);
 
+#if !PLAYER_EDITION
         dy += 28;
         _autoStopServerCheck = new SpaceToggle
         {
             Location = new Point(22, dy),
             Size = new Size(350, 26),
-            Text = "Останавливать локальный сервер",
+            Text = "Останавливать сервер при выходе",
             Checked = _settings.AutoStopServer,
         };
         _autoStopServerCheck.CheckedChanged += (_, _) => { _settings.AutoStopServer = _autoStopServerCheck.Checked; _settings.Save(); };
-
-        _settingsDrawer.Controls.Add(_minimizeOnStartCheck);
         _settingsDrawer.Controls.Add(_autoStopServerCheck);
+#endif
 
         dy += 34;
         _settingsDrawer.Controls.Add(MakeDrawerSectionLabel("ПАПКА ИГРЫ И ОБНОВЛЕНИЯ", 22, dy));
@@ -576,13 +603,25 @@ public sealed class LauncherForm : Form, IBackdropProvider
         _setManifestUrlBox.PlaceholderText = LauncherSettings.DefaultManifestUrl;
         _settingsDrawer.Controls.Add(_setManifestUrlBox);
 
+#if !PLAYER_EDITION
         dy += 34;
-        _setCheatPanelBtn = new SpaceButton
+        _setServerToggleBtn = new SpaceButton
         {
             Location = new Point(22, dy),
-            Size = new Size(350, 32),
-            Text = "ЧИТ-ПАНЕЛЬ АДМИНА (ВЫДАЧА ПО НИКУ)",
-            Font = new Font("Segoe UI", 8.2f, FontStyle.Bold),
+            Size = new Size(172, 32),
+            Text = "ЗАПУСТИТЬ СЕРВЕР",
+            Font = new Font("Segoe UI", 8f, FontStyle.Bold),
+            BorderColor = SpaceTheme.AccentGreen,
+            Visible = _detectedEmuDir != null,
+        };
+        _setServerToggleBtn.Click += async (_, _) => await ToggleDedicatedServerFromUiAsync();
+
+        _setCheatPanelBtn = new SpaceButton
+        {
+            Location = new Point(200, dy),
+            Size = new Size(172, 32),
+            Text = "ЧИТ-ПАНЕЛЬ ПО НИКУ",
+            Font = new Font("Segoe UI", 8f, FontStyle.Bold),
             BorderColor = SpaceTheme.AccentCyan,
             Visible = CanOpenCheatPanel(),
         };
@@ -591,7 +630,9 @@ public sealed class LauncherForm : Form, IBackdropProvider
             ToggleSettingsDrawer(false);
             await OpenCheatPanelAsync();
         };
+        _settingsDrawer.Controls.Add(_setServerToggleBtn);
         _settingsDrawer.Controls.Add(_setCheatPanelBtn);
+#endif
 
         // Drawer Footer Buttons
         _setVerifyBtn = new SpaceButton
@@ -643,7 +684,9 @@ public sealed class LauncherForm : Form, IBackdropProvider
 
         CollectAnimatables(this);
         TryApplyIcon();
+#if !PLAYER_EDITION
         SetDrawerMode(_settings.UseLocalServer);
+#endif
         UpdatePathAndOptionsUi();
         RefreshStatus();
         RenderComposedBackdropFrame();
@@ -1133,6 +1176,7 @@ public sealed class LauncherForm : Form, IBackdropProvider
         var checkItem = new ToolStripMenuItem("Проверить целостность файлов");
         checkItem.Click += async (_, _) => await CheckUpdatesAsync(forceFullHash: true, promptSelfUpdate: true);
 
+#if !PLAYER_EDITION
         var switchModeItem = new ToolStripMenuItem("Переключить Онлайн / Локальный сервер");
         switchModeItem.Click += async (_, _) =>
         {
@@ -1149,8 +1193,12 @@ public sealed class LauncherForm : Form, IBackdropProvider
             RefreshStatus();
         };
 
-        var serverCtrlItem = new ToolStripMenuItem("Остановить локальный сервер");
-        serverCtrlItem.Click += (_, _) => StopServer();
+        var serverStartStopItem = new ToolStripMenuItem("Запустить локальный сервер (без игры)");
+        serverStartStopItem.Click += async (_, _) => await ToggleDedicatedServerFromUiAsync(confirmBeforeStop: false);
+
+        var cheatItem = new ToolStripMenuItem("Чит-панель админа (по нику)");
+        cheatItem.Click += async (_, _) => await OpenCheatPanelAsync();
+#endif
 
         var folderItem = new ToolStripMenuItem("Открыть папку игры");
         folderItem.Click += (_, _) => OpenGameDirectory();
@@ -1162,21 +1210,25 @@ public sealed class LauncherForm : Form, IBackdropProvider
             if (!_showingLogInPatches) TogglePatchesConsoleView();
         };
 
-        var cheatItem = new ToolStripMenuItem("Чит-панель админа (по нику)");
-        cheatItem.Click += async (_, _) => await OpenCheatPanelAsync();
-
         menu.Items.Add(checkItem);
+#if !PLAYER_EDITION
+        menu.Items.Add(serverStartStopItem);
         menu.Items.Add(switchModeItem);
-        menu.Items.Add(serverCtrlItem);
         menu.Items.Add(cheatItem);
+#endif
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(folderItem);
         menu.Items.Add(logItem);
         menu.Opening += (_, _) =>
         {
-            bool localUp = (_serverProcess != null && !_serverProcess.HasExited) || IsPortOpen(_settings.GamePort);
-            serverCtrlItem.Visible = _settings.UseLocalServer && localUp;
+#if !PLAYER_EDITION
+            bool localUp = IsLocalServerRunning();
+            serverStartStopItem.Visible = _detectedEmuDir != null || localUp;
+            serverStartStopItem.Text = localUp
+                ? "Остановить локальный сервер"
+                : "Запустить локальный сервер (без игры)";
             cheatItem.Visible = CanOpenCheatPanel();
+#endif
         };
         return menu;
     }
@@ -1266,9 +1318,14 @@ public sealed class LauncherForm : Form, IBackdropProvider
                 }
             }
 
+#if PLAYER_EDITION
+            string? selfUpdateUrl = manifest.PlayerLauncherUrl;
+#else
+            string? selfUpdateUrl = manifest.LauncherUrl;
+#endif
             if (promptSelfUpdate &&
                 UpdaterService.IsNewerVersion(manifest.LauncherVersion, LauncherSettings.CurrentLauncherVersion) &&
-                !string.IsNullOrWhiteSpace(manifest.LauncherUrl))
+                !string.IsNullOrWhiteSpace(selfUpdateUrl))
             {
                 var ans = MessageBox.Show(this,
                     $"Доступна новая версия лаунчера v{manifest.LauncherVersion} (у вас v{LauncherSettings.CurrentLauncherVersion}).\n" +
@@ -1277,7 +1334,7 @@ public sealed class LauncherForm : Form, IBackdropProvider
                 if (ans == DialogResult.Yes)
                 {
                     _statusCaptionText = $"ОБНОВЛЕНИЕ ЛАУНЧЕРА v{manifest.LauncherVersion}...";
-                    await UpdaterService.ApplyLauncherSelfUpdateAsync(manifest.LauncherUrl, _updateCts.Token);
+                    await UpdaterService.ApplyLauncherSelfUpdateAsync(selfUpdateUrl, _updateCts.Token);
                     Close();
                     return;
                 }
@@ -1412,13 +1469,36 @@ public sealed class LauncherForm : Form, IBackdropProvider
                 return;
             }
 
+#if PLAYER_EDITION
+            string targetHost = _settings.ServerHost;
+            ClientConfigHelper.ApplyServerEndpoint(
+                GameDir, targetHost, _settings.GamePort, _settings.AuthPort, _settings.AssetPort);
+
+            {
+                var (reachable, rtt) = await PingTcpWithLatencyAsync(targetHost, _settings.GamePort, 1200);
+                _remoteServerOnline = reachable;
+                if (reachable) _remoteLatencyMs = rtt;
+                if (!reachable)
+                {
+                    var ans = MessageBox.Show(this,
+                        $"Сервер {targetHost}:{_settings.GamePort} сейчас не отвечает.\nВсё равно запустить клиент?",
+                        "Сервер недоступен", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+                    if (ans != DialogResult.Yes) return;
+                }
+            }
+#else
             string targetHost = _settings.UseLocalServer ? "127.0.0.1" : _settings.ServerHost;
             ClientConfigHelper.ApplyServerEndpoint(
                 GameDir, targetHost, _settings.GamePort, _settings.AuthPort, _settings.AssetPort);
 
             if (_settings.UseLocalServer)
             {
-                var ready = await EnsureLocalServerStartedAsync();
+                bool alreadyRunning = IsLocalServerRunning();
+                var ready = await EnsureLocalServerStartedAsync(detached: !_settings.AutoStopServer);
+                if (alreadyRunning)
+                {
+                    _dedicatedServerMode = true;
+                }
                 if (!ready)
                 {
                     AppendLog("[Launcher] Локальный сервер ещё инициализируется, запускаю клиент параллельно...");
@@ -1437,6 +1517,7 @@ public sealed class LauncherForm : Form, IBackdropProvider
                     if (ans != DialogResult.Yes) return;
                 }
             }
+#endif
 
             // Sync custom nickname with AuthServer before Tank.exe starts
             string desiredNick = LauncherSettings.SanitizeNickname(_settings.Nickname);
@@ -1502,6 +1583,7 @@ public sealed class LauncherForm : Form, IBackdropProvider
         }
     }
 
+#if !PLAYER_EDITION
     private void SetDrawerMode(bool useLocal)
     {
         _setModeOnlineBtn.IsSelected = !useLocal;
@@ -1512,6 +1594,7 @@ public sealed class LauncherForm : Form, IBackdropProvider
         _setAuthPortNum.Enabled = online;
         _setAssetPortNum.Enabled = online;
     }
+#endif
 
     private void LoadSettingsInputsFromModel()
     {
@@ -1523,8 +1606,10 @@ public sealed class LauncherForm : Form, IBackdropProvider
         _setAssetPortNum.Value = Math.Clamp(_settings.AssetPort > 0 ? _settings.AssetPort : 18081, 1, 65535);
         _setNicknameBox.Text = _settings.Nickname;
         _setAccountIdBox.Text = _settings.AccountId;
+#if !PLAYER_EDITION
         _setCheatPanelBtn.Visible = CanOpenCheatPanel();
         SetDrawerMode(_settings.UseLocalServer);
+#endif
     }
 
     private async Task SaveSettingsFromDrawerAsync()
@@ -1541,10 +1626,17 @@ public sealed class LauncherForm : Form, IBackdropProvider
 
         _settings.GameDir = _setGameDirBox.Text.Trim();
         _settings.ManifestUrl = _setManifestUrlBox.Text.Trim();
+#if PLAYER_EDITION
+        _settings.UseLocalServer = false;
+        _settings.ServerHost = string.IsNullOrWhiteSpace(_setServerHostBox.Text)
+            ? LauncherSettings.DefaultOnlineServerHost
+            : _setServerHostBox.Text.Trim();
+#else
         _settings.UseLocalServer = _setModeLocalBtn.IsSelected;
         _settings.ServerHost = _settings.UseLocalServer
             ? "127.0.0.1"
             : (string.IsNullOrWhiteSpace(_setServerHostBox.Text) ? LauncherSettings.DefaultOnlineServerHost : _setServerHostBox.Text.Trim());
+#endif
         _settings.GamePort = (int)_setGamePortNum.Value;
         _settings.AuthPort = (int)_setAuthPortNum.Value;
         _settings.AssetPort = (int)_setAssetPortNum.Value;
@@ -1579,6 +1671,28 @@ public sealed class LauncherForm : Form, IBackdropProvider
         }
     }
 
+#if !PLAYER_EDITION
+    private async Task OnServerPillClickedAsync()
+    {
+        if (_settings.UseLocalServer && (_detectedEmuDir != null || IsLocalServerRunning()))
+        {
+            await ToggleDedicatedServerFromUiAsync(confirmBeforeStop: true);
+            return;
+        }
+        ToggleSettingsDrawer(true);
+    }
+#else
+    private Task OnServerPillClickedAsync()
+    {
+        ToggleSettingsDrawer(true);
+        return Task.CompletedTask;
+    }
+#endif
+
+#if !PLAYER_EDITION
+    private bool IsLocalServerRunning() =>
+        (_serverProcess != null && !_serverProcess.HasExited) || IsPortOpen(_settings.GamePort);
+
     private bool CanOpenCheatPanel() =>
         _detectedEmuDir != null || LauncherSettings.IsLocalHost(_settings.ServerHost) || IsPortOpen(_settings.AuthPort);
 
@@ -1589,11 +1703,11 @@ public sealed class LauncherForm : Form, IBackdropProvider
             if (_detectedEmuDir != null && !IsPortOpen(_settings.AuthPort))
             {
                 var ans = MessageBox.Show(this,
-                    "Сервер сейчас не запущен. Запустить локальный сервер для работы чит-панели?",
+                    "Сервер сейчас не запущен. Запустить локальный сервер (без игры) для работы чит-панели?",
                     "Чит-панель", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
                 if (ans == DialogResult.Yes)
                 {
-                    await EnsureLocalServerStartedAsync();
+                    await StartDedicatedServerOnlyAsync();
                 }
             }
 
@@ -1608,6 +1722,82 @@ public sealed class LauncherForm : Form, IBackdropProvider
             MessageBox.Show(this, $"Не удалось открыть чит-панель:\n{ex.Message}", "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
     }
+
+    private async Task ToggleDedicatedServerFromUiAsync(bool confirmBeforeStop = true)
+    {
+        if (IsLocalServerRunning())
+        {
+            if (confirmBeforeStop)
+            {
+                var ans = MessageBox.Show(this,
+                    "Остановить локальный сервер?\nВсе игроки, находящиеся сейчас на сервере, будут отключены.",
+                    "Локальный сервер", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                if (ans != DialogResult.Yes) return;
+            }
+            StopServer();
+        }
+        else
+        {
+            await StartDedicatedServerOnlyAsync();
+        }
+    }
+
+    private async Task StartDedicatedServerOnlyAsync()
+    {
+        if (_detectedEmuDir == null)
+        {
+            MessageBox.Show(this, "Локальный эмулятор GwtEmulator не найден рядом с лаунчером.", "Ошибка",
+                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        try
+        {
+            _dedicatedServerMode = true;
+            _statusCaptionText = "ЗАПУСК СЕРВЕРА...";
+            RefreshStatus();
+
+            bool ready = await EnsureLocalServerStartedAsync(detached: true);
+            string lanIp = GetPreferredLanIp();
+            AppendLog(ready
+                ? $"[Server] Локальный сервер запущен без игры! Друзья могут подключаться на {lanIp}:{_settings.GamePort} (выход из игры/лаунчера не остановит сервер)."
+                : $"[Server] Локальный сервер запускается... Адрес для друзей: {lanIp}:{_settings.GamePort}");
+        }
+        catch (Exception ex)
+        {
+            _dedicatedServerMode = false;
+            AppendLog($"[Server] Не удалось запустить сервер: {ex.Message}");
+            MessageBox.Show(this, $"Не удалось запустить локальный сервер:\n{ex.Message}", "Ошибка",
+                MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally
+        {
+            RefreshStatus();
+            UpdatePathAndOptionsUi();
+        }
+    }
+
+    private static string GetPreferredLanIp()
+    {
+        try
+        {
+            var ips = NetworkInterface.GetAllNetworkInterfaces()
+                .Where(n => n.OperationalStatus == OperationalStatus.Up
+                            && n.NetworkInterfaceType != NetworkInterfaceType.Loopback)
+                .SelectMany(n => n.GetIPProperties().UnicastAddresses)
+                .Where(u => u.Address.AddressFamily == AddressFamily.InterNetwork)
+                .Select(u => u.Address.ToString())
+                .ToList();
+            return ips.FirstOrDefault(ip => ip.StartsWith("26.", StringComparison.Ordinal))
+                ?? ips.FirstOrDefault()
+                ?? "127.0.0.1";
+        }
+        catch
+        {
+            return "127.0.0.1";
+        }
+    }
+#endif
 
     private void OpenGameDirectory()
     {
@@ -1624,7 +1814,8 @@ public sealed class LauncherForm : Form, IBackdropProvider
         }
     }
 
-    private async Task<bool> EnsureLocalServerStartedAsync()
+#if !PLAYER_EDITION
+    private async Task<bool> EnsureLocalServerStartedAsync(bool detached = false)
     {
         if (IsPortOpen(_settings.GamePort) || (_serverProcess != null && !_serverProcess.HasExited))
         {
@@ -1643,17 +1834,25 @@ public sealed class LauncherForm : Form, IBackdropProvider
         if (serverExe != null)
         {
             AppendLog($"[Launcher] Запускаю сервер: {Path.GetFileName(serverExe)}");
-            psi = new ProcessStartInfo
-            {
-                FileName = serverExe,
-                WorkingDirectory = emuDir,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                StandardOutputEncoding = Encoding.UTF8,
-                StandardErrorEncoding = Encoding.UTF8,
-            };
+            psi = detached
+                ? new ProcessStartInfo
+                {
+                    FileName = serverExe,
+                    WorkingDirectory = emuDir,
+                    UseShellExecute = true,
+                    WindowStyle = ProcessWindowStyle.Minimized,
+                }
+                : new ProcessStartInfo
+                {
+                    FileName = serverExe,
+                    WorkingDirectory = emuDir,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    StandardOutputEncoding = Encoding.UTF8,
+                    StandardErrorEncoding = Encoding.UTF8,
+                };
         }
         else
         {
@@ -1661,30 +1860,45 @@ public sealed class LauncherForm : Form, IBackdropProvider
             if (!Directory.Exists(appProj))
                 throw new DirectoryNotFoundException($"Не найден проект эмулятора: {appProj}");
             AppendLog("[Launcher] Бинарник сервера не найден — запускаю через dotnet run...");
-            psi = new ProcessStartInfo
-            {
-                FileName = "dotnet",
-                Arguments = $"run --project \"{appProj}\"",
-                WorkingDirectory = emuDir,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                StandardOutputEncoding = Encoding.UTF8,
-                StandardErrorEncoding = Encoding.UTF8,
-            };
+            psi = detached
+                ? new ProcessStartInfo
+                {
+                    FileName = "dotnet",
+                    Arguments = $"run --project \"{appProj}\"",
+                    WorkingDirectory = emuDir,
+                    UseShellExecute = true,
+                    WindowStyle = ProcessWindowStyle.Minimized,
+                }
+                : new ProcessStartInfo
+                {
+                    FileName = "dotnet",
+                    Arguments = $"run --project \"{appProj}\"",
+                    WorkingDirectory = emuDir,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    StandardOutputEncoding = Encoding.UTF8,
+                    StandardErrorEncoding = Encoding.UTF8,
+                };
         }
 
         var proc = new Process { StartInfo = psi, EnableRaisingEvents = true };
-        proc.OutputDataReceived += (_, e) => { if (e.Data != null && !IsDisposed) BeginInvoke(() => AppendLog(e.Data)); };
-        proc.ErrorDataReceived += (_, e) => { if (e.Data != null && !IsDisposed) BeginInvoke(() => AppendLog("[ERR] " + e.Data)); };
-        proc.Exited += (_, _) => { if (!IsDisposed) BeginInvoke(() => { AppendLog("[Launcher] Процесс сервера завершён."); RefreshStatus(); }); };
+        if (!detached)
+        {
+            proc.OutputDataReceived += (_, e) => { if (e.Data != null && !IsDisposed) BeginInvoke(() => AppendLog(e.Data)); };
+            proc.ErrorDataReceived += (_, e) => { if (e.Data != null && !IsDisposed) BeginInvoke(() => AppendLog("[ERR] " + e.Data)); };
+        }
+        proc.Exited += (_, _) => { if (!IsDisposed) BeginInvoke(() => { _dedicatedServerMode = false; AppendLog("[Launcher] Процесс сервера завершён."); RefreshStatus(); UpdatePathAndOptionsUi(); }); };
 
         if (!proc.Start()) throw new InvalidOperationException("Не удалось запустить процесс сервера.");
-        proc.BeginOutputReadLine();
-        proc.BeginErrorReadLine();
+        if (!detached)
+        {
+            proc.BeginOutputReadLine();
+            proc.BeginErrorReadLine();
+        }
         _serverProcess = proc;
-        _serverStartedByLauncher = true;
+        _serverStartedByLauncher = !detached;
 
         return await WaitForPortsAsync(5000, _settings.GamePort, _settings.AuthPort);
     }
@@ -1701,6 +1915,7 @@ public sealed class LauncherForm : Form, IBackdropProvider
         .OrderByDescending(File.GetLastWriteTimeUtc)
         .FirstOrDefault();
     }
+#endif
 
     private static (string? gameDir, string? emuDir) ResolveLocalDirectories()
     {
@@ -1784,8 +1999,14 @@ public sealed class LauncherForm : Form, IBackdropProvider
         _profileNameLabel.Text = string.IsNullOrWhiteSpace(_settings.Nickname)
             ? $"Player_{_settings.AccountId}"
             : _settings.Nickname;
+#if !PLAYER_EDITION
         _autoStopServerCheck.Visible = _settings.UseLocalServer;
         _setCheatPanelBtn.Visible = CanOpenCheatPanel();
+        bool localUp = IsLocalServerRunning();
+        _setServerToggleBtn.Visible = _detectedEmuDir != null || localUp;
+        _setServerToggleBtn.Text = localUp ? "ОСТАНОВИТЬ СЕРВЕР" : "ЗАПУСТИТЬ СЕРВЕР";
+        _setServerToggleBtn.BorderColor = localUp ? SpaceTheme.AccentRedBright : SpaceTheme.AccentGreen;
+#endif
     }
 
     private async Task PollTickAsync()
@@ -1852,25 +2073,28 @@ public sealed class LauncherForm : Form, IBackdropProvider
     private void OnGameExited()
     {
         AppendLog("[Launcher] Игра закрыта.");
-        if (_settings.UseLocalServer && _autoStopServerCheck.Checked && _serverStartedByLauncher)
+#if !PLAYER_EDITION
+        if (_settings.UseLocalServer && _autoStopServerCheck.Checked && _serverStartedByLauncher && !_dedicatedServerMode)
         {
             StopServer();
         }
+#endif
         RefreshStatus();
     }
 
+#if !PLAYER_EDITION
     private void StopServer()
     {
         try
         {
+            _dedicatedServerMode = false;
+            _serverStartedByLauncher = false;
             if (_serverProcess != null && !_serverProcess.HasExited)
             {
                 AppendLog("[Launcher] Останавливаю сервер...");
                 _serverProcess.Kill(entireProcessTree: true);
                 _serverProcess.WaitForExit(2000);
                 _serverProcess = null;
-                _serverStartedByLauncher = false;
-                return;
             }
             foreach (var p in Process.GetProcessesByName("GwtEmulator.App"))
             {
@@ -1885,8 +2109,10 @@ public sealed class LauncherForm : Form, IBackdropProvider
         finally
         {
             RefreshStatus();
+            UpdatePathAndOptionsUi();
         }
     }
+#endif
 
     private void RotateShowcase()
     {
@@ -1927,21 +2153,29 @@ public sealed class LauncherForm : Form, IBackdropProvider
 
     private void RefreshStatus()
     {
-        bool localServerUp = (_serverProcess != null && !_serverProcess.HasExited) || IsPortOpen(_settings.GamePort);
+#if PLAYER_EDITION
+        bool serverUp = _remoteServerOnline;
+#else
+        bool localServerUp = IsLocalServerRunning();
         bool serverUp = _settings.UseLocalServer ? localServerUp : _remoteServerOnline;
+#endif
         bool gameInstalled = File.Exists(TankExePath);
         bool gameUp = (_gameProcess != null && !_gameProcess.HasExited) || IsGameRunning();
 
+#if !PLAYER_EDITION
         if (_settings.UseLocalServer)
         {
-            _profileStatusLabel.Text = localServerUp ? "● Локально • Работает" : "● Локальный режим";
+            _profileStatusLabel.Text = localServerUp
+                ? (gameUp ? "● Сервер • В игре" : "● Сервер работает (без игры)")
+                : "● Локальный режим";
             _profileStatusLabel.ForeColor = localServerUp ? SpaceTheme.AccentGreen : SpaceTheme.AccentAmber;
             _serverPillLabel.Text = localServerUp
-                ? $"● ЛОКАЛЬНО • 127.0.0.1:{_settings.GamePort}"
-                : $"● ЛОКАЛЬНО • 127.0.0.1:{_settings.GamePort}";
+                ? $"● СЕРВЕР ВКЛ • :{ _settings.GamePort}"
+                : (_detectedEmuDir != null ? "● СЕРВЕР ВЫКЛ • ВКЛЮЧИТЬ" : $"● ЛОКАЛЬНО • 127.0.0.1:{_settings.GamePort}");
             _serverPillLabel.ForeColor = localServerUp ? SpaceTheme.AccentGreen : SpaceTheme.AccentAmber;
         }
         else
+#endif
         {
             _profileStatusLabel.Text = _remoteServerOnline
                 ? $"● Онлайн • {_remoteLatencyMs} мс"
@@ -2022,10 +2256,12 @@ public sealed class LauncherForm : Form, IBackdropProvider
         _animTimer.Stop();
         _pollTimer.Stop();
         _updateCts?.Cancel();
-        if (_serverProcess != null && !_serverProcess.HasExited && _serverStartedByLauncher)
+#if !PLAYER_EDITION
+        if (_serverProcess != null && !_serverProcess.HasExited && _serverStartedByLauncher && _settings.AutoStopServer && !_dedicatedServerMode)
         {
             try { _serverProcess.Kill(entireProcessTree: true); } catch { }
         }
+#endif
         _backdropSource?.Dispose();
         _sunOverlaySprite?.Dispose();
         _emberSprite?.Dispose();

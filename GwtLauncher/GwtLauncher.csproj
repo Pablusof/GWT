@@ -7,9 +7,12 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <ApplicationIcon>..\..\Ground War Tanks\GameIcon.ico</ApplicationIcon>
-    <AssemblyName>GWT_Launcher</AssemblyName>
+    <PlayerEdition Condition="'$(PlayerEdition)' == ''">false</PlayerEdition>
+    <AssemblyName Condition="'$(PlayerEdition)' == 'true'">GWT_Launcher_Player</AssemblyName>
+    <AssemblyName Condition="'$(PlayerEdition)' != 'true'">GWT_Launcher</AssemblyName>
+    <DefineConstants Condition="'$(PlayerEdition)' == 'true'">$(DefineConstants);PLAYER_EDITION</DefineConstants>
     <RootNamespace>GwtLauncher</RootNamespace>
-    <Version>1.4.0</Version>
+    <Version>1.4.1</Version>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>

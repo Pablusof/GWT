@@ -648,6 +648,7 @@ public static class UpdaterService
         }
     }
 
+#if !PLAYER_EDITION
     public static async Task<string> AdminRequestAsync(
         string host, int authPort, string cmd, string? playerName = null,
         Dictionary<string, string>? extraParams = null, CancellationToken ct = default)
@@ -667,6 +668,7 @@ public static class UpdaterService
         using var resp = await Http.GetAsync(sb.ToString(), timeoutCts.Token);
         return await resp.Content.ReadAsStringAsync(timeoutCts.Token);
     }
+#endif
 
     private static string ResolveBaseUrl(GameManifest manifest, string manifestUrl)
     {

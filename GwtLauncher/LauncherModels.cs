@@ -16,6 +16,9 @@ public sealed class GameManifest
     [JsonPropertyName("launcherUrl")]
     public string? LauncherUrl { get; set; }
 
+    [JsonPropertyName("playerLauncherUrl")]
+    public string? PlayerLauncherUrl { get; set; }
+
     [JsonPropertyName("gameVersion")]
     public string GameVersion { get; set; } = "1.0.0";
 
@@ -115,7 +118,7 @@ public sealed class LauncherSettings
     public bool UseLocalServer { get; set; } = true;
     public string AccountId { get; set; } = string.Empty;
     public string Nickname { get; set; } = string.Empty;
-    public bool AutoStopServer { get; set; } = true;
+    public bool AutoStopServer { get; set; } = false;
     public bool MinimizeOnStart { get; set; } = false;
     public bool RotateShowcase { get; set; } = true;
 
@@ -174,10 +177,38 @@ public sealed class LauncherSettings
         {
             if (!string.IsNullOrWhiteSpace(shipped?.ManifestUrl))
                 s.ManifestUrl = shipped.ManifestUrl.Trim();
+#if PLAYER_EDITION
+            else
+                s.ManifestUrl = DefaultManifestUrl;
+#else
             else if (detectedLocalEmuDir == null)
                 s.ManifestUrl = DefaultManifestUrl;
+#endif
         }
 
+#if PLAYER_EDITION
+        s.UseLocalServer = false;
+        if (saved == null)
+        {
+            if (!string.IsNullOrWhiteSpace(shipped?.ServerHost))
+            {
+                s.ServerHost = shipped.ServerHost.Trim();
+                s.GamePort = shipped.GamePort > 0 ? shipped.GamePort : 9801;
+                s.AuthPort = shipped.AuthPort > 0 ? shipped.AuthPort : 18080;
+                s.AssetPort = shipped.AssetPort > 0 ? shipped.AssetPort : 18081;
+            }
+            else
+            {
+                s.ServerHost = DefaultOnlineServerHost;
+            }
+        }
+        else if (IsLocalHost(s.ServerHost))
+        {
+            s.ServerHost = !string.IsNullOrWhiteSpace(shipped?.ServerHost)
+                ? shipped.ServerHost.Trim()
+                : DefaultOnlineServerHost;
+        }
+#else
         if (saved == null)
         {
             if (!string.IsNullOrWhiteSpace(shipped?.ServerHost))
@@ -199,6 +230,7 @@ public sealed class LauncherSettings
                 s.UseLocalServer = false;
             }
         }
+#endif
 
         if (string.IsNullOrWhiteSpace(s.GameDir))
         {
@@ -209,9 +241,13 @@ public sealed class LauncherSettings
         if (string.IsNullOrWhiteSpace(s.AccountId))
         {
             // Keep existing local dev account on original local install; generate unique ID for distributed players.
+#if PLAYER_EDITION
+            s.AccountId = Random.Shared.Next(100_000, 9_999_999).ToString();
+#else
             s.AccountId = detectedLocalGameDir != null && s.UseLocalServer
                 ? "12345"
                 : Random.Shared.Next(100_000, 9_999_999).ToString();
+#endif
         }
 
         s.Nickname = SanitizeNickname(s.Nickname);
