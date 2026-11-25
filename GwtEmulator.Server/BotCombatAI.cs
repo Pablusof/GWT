@@ -156,15 +156,15 @@ public static class BotCombatProfiles
         {
             TankClass.Heavy => (idx % 4) switch
             {
-                0 or 1 => BotFront.Center,
-                2      => BotFront.Left,
+                0 or 3 => BotFront.Center,
+                1      => BotFront.Left,
                 _      => BotFront.Right,
             },
             TankClass.TD => (idx % 3) switch
             {
                 0 => BotFront.Left,
-                1 => BotFront.Center,
-                _ => BotFront.Right,
+                1 => BotFront.Right,
+                _ => BotFront.Center,
             },
             _ => (idx % 5) switch // Light & Medium: predominantly flanks with occasional center support
             {

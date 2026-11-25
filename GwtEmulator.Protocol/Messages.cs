@@ -4811,7 +4811,15 @@ public class PK_HC_RespReconnectResult : BaseRequest
 public class PK_CH_CancleJoinRoom : BaseRequest { public PK_CH_CancleJoinRoom() => MsgType = TkMsgType.NM_CH_CancleJoinRoom; }
 
 [MessagePortal(TkMsgType.NM_HC_CancleJoinRoom)]
-public class PK_HC_CancleJoinRoom : BaseRequest { public PK_HC_CancleJoinRoom() => MsgType = TkMsgType.NM_HC_CancleJoinRoom; }
+public class PK_HC_CancleJoinRoom : BaseRequest
+{
+    // Client Hall.CancleJoinRoom checks (msg.flag == 1) to close QueueManager / PVEQueueManager
+    // and return ConnectionState to LoginHs.
+    public byte Flag = 1;
+    public PK_HC_CancleJoinRoom() => MsgType = TkMsgType.NM_HC_CancleJoinRoom;
+    public override IRequest ReadByte(ByteArray byteArray) { Flag = byteArray.ReadByte(); return this; }
+    public override void WriteByte(ByteArray byteArray) => byteArray.WriteByte(Flag);
+}
 
 // Client sends flag byte: 0 = free/silver spin, 1 = gold spin
 [MessagePortal(TkMsgType.NM_CH_LotteryDraw)]

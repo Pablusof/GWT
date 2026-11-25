@@ -527,7 +527,11 @@ public class HallServer : GameServer
             case TkMsgType.NM_CH_Create_Team: HandleCreateTeam(session, (PK_CH_Create_Team)message); break;
             case TkMsgType.NM_CH_Team_Change_Mode: HandleTeamChangeMode(session); break;
             case TkMsgType.NM_CH_Quick_Match: HandleQuickMatch(session, (PK_CH_Quick_Match)message); break;
-            case TkMsgType.NM_CH_Cancel_Quick_Match: session.Send(new PK_HC_Start_End_Match { State = 0 }); break;
+            case TkMsgType.NM_CH_Cancel_Quick_Match:
+                lock (_matchLock) { RemovePlayerFromWaitingLobbiesLocked(session.PlayerGUID); }
+                session.Send(new PK_HC_Start_End_Match { State = 0 });
+                session.Send(new PK_HC_CancleJoinRoom { Flag = 1 });
+                break;
             case TkMsgType.NM_CH_Start_Match: HandleStartMatch(session); break;
             case TkMsgType.NM_CH_Set_Free_Team: HandleSetFreeTeam(session, (PK_CH_Set_Free_Team)message); break;
             case TkMsgType.NM_CH_Be_Invite_Team_Ret: HandleBeInviteTeamRet(session); break;
@@ -4303,7 +4307,8 @@ public class HallServer : GameServer
         {
             RemovePlayerFromWaitingLobbiesLocked(session.PlayerGUID);
         }
-        session.Send(new PK_HC_CancleJoinRoom());
+        Console.WriteLine($"[HS] Cancelled matchmaking queue for {session.PlayerGUID}");
+        session.Send(new PK_HC_CancleJoinRoom { Flag = 1 });
     }
 
     // ── Lottery prize table ────────────────────────────────────────────────────

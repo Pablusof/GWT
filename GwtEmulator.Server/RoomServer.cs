@@ -5155,27 +5155,30 @@ public class RoomServer : GameServer
             return (gx, gz);
         }
 
-        // Geometric corridor along ownBase -> enemyBase axis shifted laterally to the bot's front.
-        float fdx = enemyZone.XCenter - ownZone.XCenter;
-        float fdz = enemyZone.ZCenter - ownZone.ZCenter;
-        float span = MathF.Sqrt(fdx * fdx + fdz * fdz);
-        if (span < 10f) { fdx = 0f; fdz = 1f; span = 100f; }
-        float fwdX = fdx / span, fwdZ = fdz / span;
-        float rightX = -fwdZ, rightZ = fwdX;
+        // Geometric corridor along ownBase -> enemyBase axis spanning the FULL playable
+        // lateral width of the map (handles both symmetrical and asymmetrical-spawn maps
+        // such as Caen, Caucasus, and Burning Sands).
+        var (fwdX, fwdZ, rightX, rightZ, span) = ComputeBattleAxes(ownZone, enemyZone);
+        float midProg = (minFrac + maxFrac) * 0.5f;
+        float laneFrac = FrontToLateralFrac(bot.Front);
 
-        float mapWidthX = mapCfg.XMax - mapCfg.XMin;
-        float mapWidthZ = mapCfg.ZMax - mapCfg.ZMin;
-        float lateralSpan = MathF.Abs(rightX) * mapWidthX + MathF.Abs(rightZ) * mapWidthZ;
-        float laneOffset = lane * MathF.Max(35f, lateralSpan * 0.28f);
+        var (midLatLo, midLatHi) = ComputeLateralBoundsAtProgress(
+            ownZone.XCenter, ownZone.ZCenter, fwdX, fwdZ, rightX, rightZ, span, midProg,
+            exMinX, exMaxX, exMinZ, exMaxZ);
+        float midSide = midLatLo + (midLatHi - midLatLo) * laneFrac;
+        float fallbackX = Math.Clamp(ownZone.XCenter + fwdX * span * midProg + rightX * midSide, exMinX, exMaxX);
+        float fallbackZ = Math.Clamp(ownZone.ZCenter + fwdZ * span * midProg + rightZ * midSide, exMinZ, exMaxZ);
 
-        float fallbackX = Math.Clamp(ownZone.XCenter + fwdX * span * ((minFrac + maxFrac) * 0.5f), exMinX, exMaxX);
-        float fallbackZ = Math.Clamp(ownZone.ZCenter + fwdZ * span * ((minFrac + maxFrac) * 0.5f), exMinZ, exMaxZ);
-
-        for (int attempt = 0; attempt < 24; attempt++)
+        for (int attempt = 0; attempt < 28; attempt++)
         {
             float frac = minFrac + (float)_random.NextDouble() * (maxFrac - minFrac);
-            float jitter = ((float)_random.NextDouble() * 2f - 1f) * 32f;
-            float side = laneOffset * (attempt < 16 ? 1f : 0.45f) + jitter;
+            var (latLo, latHi) = ComputeLateralBoundsAtProgress(
+                ownZone.XCenter, ownZone.ZCenter, fwdX, fwdZ, rightX, rightZ, span, frac,
+                exMinX, exMaxX, exMinZ, exMaxZ);
+            float latW = MathF.Max(20f, latHi - latLo);
+            float jitterFrac = ((float)_random.NextDouble() * 2f - 1f) * (attempt < 18 ? 0.08f : 0.16f);
+            float targetLatFrac = Math.Clamp(laneFrac + jitterFrac, 0.06f, 0.94f);
+            float side = latLo + latW * targetLatFrac;
             float cx = Math.Clamp(ownZone.XCenter + fwdX * span * frac + rightX * side, exMinX, exMaxX);
             float cz = Math.Clamp(ownZone.ZCenter + fwdZ * span * frac + rightZ * side, exMinZ, exMaxZ);
             if (Distance2D(cx, cz, enemyZone.XCenter, enemyZone.ZCenter) < 45f) continue;
@@ -5184,6 +5187,136 @@ public class RoomServer : GameServer
         }
 
         return (fallbackX, fallbackZ);
+    }
+
+    private static (float fwdX, float fwdZ, float rightX, float rightZ, float span) ComputeBattleAxes(
+        SpawnZone ownZone, SpawnZone enemyZone)
+    {
+        float fdx = enemyZone.XCenter - ownZone.XCenter;
+        float fdz = enemyZone.ZCenter - ownZone.ZCenter;
+        float span = MathF.Sqrt(fdx * fdx + fdz * fdz);
+        if (span < 10f) { fdx = 0f; fdz = 1f; span = 100f; }
+        float fwdX = fdx / span, fwdZ = fdz / span;
+        return (fwdX, fwdZ, -fwdZ, fwdX, span);
+    }
+
+    private static float FrontToLateralFrac(BotFront front) => front switch
+    {
+        BotFront.Left  => 0.16f,
+        BotFront.Right => 0.84f,
+        _              => 0.50f,
+    };
+
+    /// <summary>
+    /// Intersects the lateral line through ownZone + fwd*(span*prog) with the playable
+    /// rectangle [minX..maxX] x [minZ..maxZ] to obtain exact left/right flank bounds.
+    /// </summary>
+    private static (float latLo, float latHi) ComputeLateralBoundsAtProgress(
+        float ownX, float ownZ, float fwdX, float fwdZ, float rightX, float rightZ,
+        float span, float prog, float minX, float maxX, float minZ, float maxZ)
+    {
+        float bx = ownX + fwdX * (span * prog);
+        float bz = ownZ + fwdZ * (span * prog);
+        float sMin = -1e5f, sMax = 1e5f;
+        if (MathF.Abs(rightX) > 1e-4f)
+        {
+            float t1 = (minX - bx) / rightX;
+            float t2 = (maxX - bx) / rightX;
+            sMin = MathF.Max(sMin, MathF.Min(t1, t2));
+            sMax = MathF.Min(sMax, MathF.Max(t1, t2));
+        }
+        if (MathF.Abs(rightZ) > 1e-4f)
+        {
+            float t1 = (minZ - bz) / rightZ;
+            float t2 = (maxZ - bz) / rightZ;
+            sMin = MathF.Max(sMin, MathF.Min(t1, t2));
+            sMax = MathF.Min(sMax, MathF.Max(t1, t2));
+        }
+        return sMin <= sMax ? (sMin, sMax) : (0f, 0f);
+    }
+
+    /// <summary>
+    /// Picks a target for an individual bot while keeping flank discipline and spreading
+    /// fire across different spotted enemies instead of piling the entire team onto one tank.
+    /// </summary>
+    private RoomPlayer? SelectBotTarget(
+        BattleRoom room, RoomPlayer bot, MapConfig mapCfg, List<RoomPlayer> spottedEnemies,
+        in CombatProfile prof, ObstacleBox[] obstacles, bool isDefenseAttacker,
+        Dictionary<long, int> aimersByTarget)
+    {
+        if (spottedEnemies.Count == 0) return null;
+
+        var ownZone   = bot.Group == 0 ? mapCfg.Team0 : mapCfg.Team1;
+        var enemyZone = bot.Group == 0 ? mapCfg.Team1 : mapCfg.Team0;
+        var (fwdX, fwdZ, rightX, rightZ, span) = ComputeBattleAxes(ownZone, enemyZone);
+        float exMinX = mapCfg.XMin + 22f, exMaxX = mapCfg.XMax - 22f;
+        float exMinZ = mapCfg.ZMin + 22f, exMaxZ = mapCfg.ZMax - 22f;
+        float botLaneFrac = FrontToLateralFrac(bot.Front);
+
+        RoomPlayer? best = null;
+        float bestScore = float.NegativeInfinity;
+
+        foreach (var e in spottedEnemies)
+        {
+            float d = Distance2D(bot, e);
+            bool hasDirectLos = d <= MathF.Max(prof.DetectRange, 180f)
+                && !SegmentBlocked3D(bot.PosX, bot.PosY + 1f, bot.PosZ, e.PosX, e.PosY + 1f, e.PosZ, obstacles)
+                && !TerrainBlocksShot(room, bot.PosX, bot.PosZ, bot.PosY + 1f, e.PosX, e.PosZ, e.PosY + 1f);
+
+            float rx = e.PosX - ownZone.XCenter, rz = e.PosZ - ownZone.ZCenter;
+            float eProg = Math.Clamp((rx * fwdX + rz * fwdZ) / span, 0.1f, 0.9f);
+            var (latLo, latHi) = ComputeLateralBoundsAtProgress(
+                ownZone.XCenter, ownZone.ZCenter, fwdX, fwdZ, rightX, rightZ, span, eProg,
+                exMinX, exMaxX, exMinZ, exMaxZ);
+            float eLat = rx * rightX + rz * rightZ;
+            float eLatFrac = (latHi - latLo) > 10f
+                ? Math.Clamp((eLat - latLo) / (latHi - latLo), 0f, 1f)
+                : 0.5f;
+            float frontMismatch = MathF.Abs(eLatFrac - botLaneFrac);
+
+            // Flank discipline: don't abandon Left/Right flank to chase a distant enemy
+            // sitting behind buildings on a completely different front.
+            if (!isDefenseAttacker && !hasDirectLos)
+            {
+                if (bot.FrontStage < 2 && d > 145f && frontMismatch > 0.28f)
+                    continue;
+                if (d > MathF.Min(prof.DetectRange, 215f))
+                    continue;
+            }
+
+            float hpFrac = e.MaxHp > 0 ? (float)e.CurHp / e.MaxHp : 1f;
+            float score = -d * 0.65f;
+            if (hasDirectLos) score += 70f;
+            score += (0.35f - MathF.Min(0.35f, frontMismatch)) * 120f;
+
+            score += prof.Target switch
+            {
+                TargetPriority.Weakest   => (1f - hpFrac) * 24f,
+                TargetPriority.HighValue => MathF.Min(22f, e.MaxHp / 100f),
+                _                        => -d * 0.20f,
+            };
+
+            if (room.GameMode == BattleGameMode.Commander && e.IsCommander)
+                score += 28f;
+            if (e.PlayerGUID == bot.AimTargetGuid)
+                score += 20f;
+
+            // Strongly discourage piling multiple bots onto one single enemy when other targets exist.
+            int otherAimers = aimersByTarget.TryGetValue(e.PlayerGUID, out int cnt) ? cnt : 0;
+            if (otherAimers > 0)
+                score -= otherAimers * 55f + Math.Max(0, otherAimers - 1) * 35f;
+
+            // Deterministic per-bot tie-breaker so identical bots split across equal-value targets.
+            score += (Math.Abs(bot.PlayerGUID * 31 + e.PlayerGUID) % 7) * 3f;
+
+            if (score > bestScore)
+            {
+                bestScore = score;
+                best = e;
+            }
+        }
+
+        return best;
     }
 
     private static void ResetBotMotionState(RoomPlayer bot)
@@ -5223,13 +5356,16 @@ public class RoomServer : GameServer
             ? room.FileObstacles : GetMapConfig(room.MapId).Obstacles;
         var spottedByGroup0 = ComputeSpotted(room, 0, visObstacles);
         var spottedByGroup1 = ComputeSpotted(room, 1, visObstacles);
-        // Phase 4 — team focus fire: one shared priority target per side.
-        long focusGroup0 = ComputeFocusTarget(room, 0, spottedByGroup0);
-        long focusGroup1 = ComputeFocusTarget(room, 1, spottedByGroup1);
+        var aimersGroup0 = new Dictionary<long, int>();
+        var aimersGroup1 = new Dictionary<long, int>();
 
-        foreach (var bot in room.Players.Values)
+        var activeBots = room.Players.Values
+            .Where(p => p.IsBot && !p.IsDead)
+            .OrderBy(p => p.PlayerGUID)
+            .ToList();
+
+        foreach (var bot in activeBots)
         {
-            if (!bot.IsBot || bot.IsDead) continue;
             // Pre-battle prep: bot sits at its spawn (no move dictate, no fire) until
             // the 25 s countdown ends. It's already visible to clients from CreateMonster.
             if (DateTime.UtcNow < room.CombatStartUtc) continue;
@@ -5270,23 +5406,15 @@ public class RoomServer : GameServer
             var enemies = room.Players.Values
                 .Where(p => p.Group != bot.Group && !p.IsDead && spotted.Contains(p.PlayerGUID))
                 .ToList();
-            // Pick WHICH spotted enemy to fight. Phase 4 focus fire: if the team's
-            // shared focus target is spotted AND within this bot's reach, gang up on it;
-            // otherwise fall back to the vehicle's own doctrine (heavy→nearest,
-            // medium/light→weakest, TD→highest-value).
-            long focus = bot.Group == 0 ? focusGroup0 : focusGroup1;
-            RoomPlayer? focusP = null;
-            if (focus != 0L && room.Players.TryGetValue(focus, out var fp)
-                && !fp.IsDead && enemies.Contains(fp)
-                && Distance2D(bot, fp) < prof.DetectRange)
-                focusP = fp;
-            RoomPlayer? nearestEnemy = focusP ?? prof.Target switch
-            {
-                TargetPriority.Weakest   => enemies.OrderBy(p => p.CurHp).FirstOrDefault(),
-                TargetPriority.HighValue => enemies.OrderByDescending(p => p.MaxHp)
-                                                   .ThenBy(p => Distance2D(bot, p)).FirstOrDefault(),
-                _                        => enemies.OrderBy(p => Distance2D(bot, p)).FirstOrDefault(),
-            };
+            bool isDefenseAttacker = isDefenseMode && bot.Group == attackerGroup;
+            bool isDefender        = isDefenseMode && bot.Group == playerGroup; // союзники игрока в обороне
+            var  aimers            = bot.Group == 0 ? aimersGroup0 : aimersGroup1;
+
+            // Per-bot distributed targeting: respect flank lanes and spread fire across different tanks.
+            RoomPlayer? nearestEnemy = SelectBotTarget(
+                room, bot, mapCfg, enemies, prof, botObstacles, isDefenseAttacker, aimers);
+            if (nearestEnemy != null)
+                aimers[nearestEnemy.PlayerGUID] = aimers.TryGetValue(nearestEnemy.PlayerGUID, out int c) ? c + 1 : 1;
             float nearestDist = nearestEnemy != null ? Distance2D(bot, nearestEnemy) : float.MaxValue;
             // Remember where we last saw something, so we can push to its last-known
             // spot after it slips out of sight instead of forgetting it instantly.
@@ -5308,8 +5436,6 @@ public class RoomServer : GameServer
                 bot.AimStartTime  = DateTime.UtcNow;
             }
 
-            bool  isDefenseAttacker = isDefenseMode && bot.Group == attackerGroup;
-            bool  isDefender        = isDefenseMode && bot.Group == playerGroup; // союзники игрока в обороне
             var   nowUtc            = DateTime.UtcNow;
 
             // ── select movement target & human-like tactical state ─────────────

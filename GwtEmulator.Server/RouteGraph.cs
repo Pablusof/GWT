@@ -131,13 +131,13 @@ namespace GwtEmulator.Server
             float halfLat = MathF.Max(60f, (maxLat - minLat) * 0.5f);
 
             float targetProg = (minFrac + maxFrac) * 0.5f;
-            float targetLat  = lane * 0.58f;
+            float targetLat  = lane * 0.72f;
 
             var ranked = new List<(float score, float x, float z)>();
             for (int pass = 0; pass < 2 && ranked.Count == 0; pass++)
             {
-                float pLo = pass == 0 ? minFrac : MathF.Max(0.12f, minFrac - 0.10f);
-                float pHi = pass == 0 ? maxFrac : MathF.Min(0.92f, maxFrac + 0.10f);
+                float pLo = pass == 0 ? minFrac : MathF.Max(0.12f, minFrac - 0.12f);
+                float pHi = pass == 0 ? maxFrac : MathF.Min(0.92f, maxFrac + 0.12f);
 
                 for (int i = 0; i < _nodes.Count; i++)
                 {
@@ -149,17 +149,17 @@ namespace GwtEmulator.Server
                     float prog = (rx * fwdX + rz * fwdZ) / span;
                     if (prog < pLo || prog > pHi) continue;
 
+                    // Strictly preserve the assigned front corridor in both passes so flank bots
+                    // never silently snap back to the center; if the route file lacks nodes on a
+                    // flank, return false and let RoomServer use the geometric flank corridor.
                     float latNorm = ((rx * rightX + rz * rightZ) - midLat) / halfLat;
-                    if (pass == 0)
-                    {
-                        if (lane < 0 && latNorm > -0.15f) continue;
-                        if (lane > 0 && latNorm <  0.15f) continue;
-                        if (lane == 0 && MathF.Abs(latNorm) > 0.35f) continue;
-                    }
+                    if (lane < 0 && latNorm > -0.22f) continue;
+                    if (lane > 0 && latNorm <  0.22f) continue;
+                    if (lane == 0 && MathF.Abs(latNorm) > 0.28f) continue;
 
                     if (!isValid(node.X, node.Z)) continue;
 
-                    float score = -MathF.Abs(prog - targetProg) * 1.4f - MathF.Abs(latNorm - targetLat);
+                    float score = -MathF.Abs(prog - targetProg) * 1.4f - MathF.Abs(latNorm - targetLat) * 1.3f;
                     ranked.Add((score, node.X, node.Z));
                 }
             }
