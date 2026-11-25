@@ -15,6 +15,7 @@ public static class BattleModeRegistry
     private static readonly ConcurrentDictionary<long, int>          _expectedPlayers = new();
     private static readonly ConcurrentDictionary<long, bool>         _endedRooms = new();
     private static readonly ConcurrentDictionary<long, ConcurrentDictionary<long, byte>> _roomHumans = new();
+    private static readonly ConcurrentDictionary<long, ConcurrentDictionary<long, long>> _roomSquads = new();
 
     public readonly struct ModeEntry
     {
@@ -52,10 +53,26 @@ public static class BattleModeRegistry
     public static int GetExpectedPlayers(long roomGuid) =>
         _expectedPlayers.TryGetValue(roomGuid, out var c) ? c : 1;
 
+    public static void RecordSquad(long roomGuid, long squadId, System.Collections.Generic.IEnumerable<long> memberGuids)
+    {
+        if (roomGuid == 0 || squadId == 0) return;
+        var map = _roomSquads.GetOrAdd(roomGuid, _ => new ConcurrentDictionary<long, long>());
+        foreach (var guid in memberGuids)
+            map[guid] = squadId;
+    }
+
+    public static long GetPlayerSquadId(long roomGuid, long playerGuid)
+    {
+        if (_roomSquads.TryGetValue(roomGuid, out var map) && map.TryGetValue(playerGuid, out var squadId))
+            return squadId;
+        return 0;
+    }
+
     public static void MarkEnded(long roomGuid)
     {
         _endedRooms[roomGuid] = true;
         _roomHumans.TryRemove(roomGuid, out _);
+        _roomSquads.TryRemove(roomGuid, out _);
     }
 
     public static bool IsRoomActive(long roomGuid) =>
@@ -77,6 +94,7 @@ public static class BattleModeRegistry
         _expectedPlayers.TryRemove(roomGuid, out _);
         _endedRooms.TryRemove(roomGuid, out _);
         _roomHumans.TryRemove(roomGuid, out _);
+        _roomSquads.TryRemove(roomGuid, out _);
     }
 }
 

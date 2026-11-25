@@ -448,7 +448,8 @@ public class RoomServer : GameServer
             Obstacles: Array.Empty<ObstacleBox>(),
             // Чистые позиции у ворот и перед линией стен (не за глухим забором с трубами):
             BotSpawns:      new (float, float)[] { (180f, 185f), (275f, 185f), (375f, 185f), (205f, 145f), (365f, 145f) },
-            AttackerSpawns: new (float, float)[] { (150f, 475f), (270f, 475f), (455f, 475f) }),
+            // Ровно 2 спавна врагов по флангам линии атаки:
+            AttackerSpawns: new (float, float)[] { (150f, 475f), (455f, 475f) }),
 
         // ── Горящие пески / alm (network MapId 11) ────────────────────────────
         // ИСПРАВЛЕНО: этот id грузит НЕ Берлин, а пустынную карту «Горящие пески»
@@ -1987,8 +1988,12 @@ public class RoomServer : GameServer
     // or drive through one another; tracked tanks stay pinned and never get pushed into hazards.
     private void SeparateFromTanks(BattleRoom room, RoomPlayer bot, ObstacleBox[] obstacles, MapConfig cfg)
     {
+        // Solid separation against living tanks AND dead wrecks; if a human is actively
+        // ramming a bot, let the bot yield smoothly along the push vector so ramming feels physical
+        // instead of bouncing the player off an immovable wall.
         if (bot.TrackImmobilized) return;
         float pushX = 0f, pushZ = 0f;
+        bool pushedByHuman = false;
         foreach (var other in room.Players.Values)
         {
             if (ReferenceEquals(other, bot)) continue;
@@ -2000,6 +2005,13 @@ public class RoomServer : GameServer
             float d = MathF.Sqrt(d2);
             float overlap = SolidTankSpacing - d;
             float scale = other.IsDead || !other.IsBot || other.TrackImmobilized ? 1.0f : 0.55f;
+            float maxAmt = 0.42f;
+            if (!other.IsBot && !other.IsDead)
+            {
+                pushedByHuman = true;
+                float weightRatio = Math.Clamp((float)Math.Max(1, other.MaxHp) / Math.Max(1, bot.MaxHp), 0.35f, 1.6f);
+                maxAmt = 0.42f * weightRatio;
+            }
             if (d < 0.05f)
             {
                 float angle = (bot.PlayerGUID % 16) * (MathF.PI / 8f);
@@ -2008,16 +2020,17 @@ public class RoomServer : GameServer
             }
             else
             {
-                float amt = Math.Min(overlap * scale, 0.42f);
+                float amt = Math.Min(overlap * scale, maxAmt);
                 pushX += (dx / d) * amt;
                 pushZ += (dz / d) * amt;
             }
         }
         if (pushX == 0f && pushZ == 0f) return;
+        float pushCap = pushedByHuman ? 0.65f : 0.42f;
         float pushLen = MathF.Sqrt(pushX * pushX + pushZ * pushZ);
-        if (pushLen > 0.42f)
+        if (pushLen > pushCap)
         {
-            float s = 0.42f / pushLen;
+            float s = pushCap / pushLen;
             pushX *= s; pushZ *= s;
         }
         float nx = Math.Clamp(bot.PosX + pushX, cfg.XMin + 5f, cfg.XMax - 5f);
@@ -2558,8 +2571,10 @@ public class RoomServer : GameServer
                 }
                 break;
             case TkMsgType.NM_CR_HEHit:
-            case TkMsgType.NM_CR_CrashDamage:
                 break; // known; HE damage is applied via the ShellHit path
+            case TkMsgType.NM_CR_CrashDamage:
+                if (message is PK_CR_CrashDamage crash) HandleCrashDamage(session, crash);
+                break;
             case TkMsgType.NM_CR_PVE_SkillRequest:
                 if (message is PK_CR_PVE_SkillRequest skReq) HandleSkillRequest(session, skReq);
                 break;
@@ -3020,17 +3035,49 @@ public class RoomServer : GameServer
         var session    = firstHuman.Session;
         bool isDefenseRoom = mode == BattleGameMode.Defense;
 
-        // Balance teams & refresh spawns BEFORE spawning bots so all players start cleanly
+        // Balance teams & refresh spawns BEFORE spawning bots so all players start cleanly.
+        // Squadmates (same SquadId in BattleModeRegistry) ALWAYS stay on the same team!
         if (humansSnapshot.Count > 1)
         {
             byte firstGroup = isDefenseRoom ? (byte)0 : humansSnapshot[0].Group;
-            for (int hi = 0; hi < humansSnapshot.Count; hi++)
+            if (isDefenseRoom)
             {
-                var ph = humansSnapshot[hi];
-                ph.Group = isDefenseRoom ? (byte)0 : (byte)((firstGroup + hi) % 2);
-                (ph.PosX, ph.PosZ) = PickSpawnSpot(room, ph.Group);
-                ph.PosY = GetSpawnY(ph.Group, room.MapId);
-                ph.RotY = GetSpawnYaw(room.MapId, ph.Group);
+                foreach (var ph in humansSnapshot)
+                {
+                    ph.Group = 0;
+                    (ph.PosX, ph.PosZ) = PickSpawnSpot(room, ph.Group);
+                    ph.PosY = GetSpawnY(ph.Group, room.MapId);
+                    ph.RotY = GetSpawnYaw(room.MapId, ph.Group);
+                }
+            }
+            else
+            {
+                var squadGroup = new Dictionary<long, byte>();
+                int count0 = 0, count1 = 0;
+                // Group humans by squad first so squads stick together
+                var ordered = humansSnapshot
+                    .OrderByDescending(p => BattleModeRegistry.GetPlayerSquadId(room.RoomGUID, p.PlayerGUID) != 0)
+                    .ThenBy(p => BattleModeRegistry.GetPlayerSquadId(room.RoomGUID, p.PlayerGUID))
+                    .ToList();
+                foreach (var ph in ordered)
+                {
+                    long sqId = BattleModeRegistry.GetPlayerSquadId(room.RoomGUID, ph.PlayerGUID);
+                    byte grp;
+                    if (sqId != 0 && squadGroup.TryGetValue(sqId, out var assigned))
+                    {
+                        grp = assigned;
+                    }
+                    else
+                    {
+                        grp = count0 <= count1 ? firstGroup : (byte)(1 - firstGroup);
+                        if (sqId != 0) squadGroup[sqId] = grp;
+                    }
+                    ph.Group = grp;
+                    if (grp == 0) count0++; else count1++;
+                    (ph.PosX, ph.PosZ) = PickSpawnSpot(room, ph.Group);
+                    ph.PosY = GetSpawnY(ph.Group, room.MapId);
+                    ph.RotY = GetSpawnYaw(room.MapId, ph.Group);
+                }
             }
         }
 
@@ -3834,7 +3881,7 @@ public class RoomServer : GameServer
                 BroadcastToRoom(room, new PK_RC_CommanderState { PlayerGUID = cmd.PlayerGUID, State = 2 });
                 BroadcastToRoom(room, new PK_RC_SynHP
                 {
-                    AttackerGUID = 0, PlayerGUID = cmd.PlayerGUID, CurHp = cmd.CurHp, Reason = 0
+                    AttackerGUID = cmd.PlayerGUID, PlayerGUID = cmd.PlayerGUID, CurHp = cmd.CurHp, Reason = 0
                 });
                 BroadcastToRoom(room, new PK_RC_CommanderScore { Side = grp, Score = cmd.CurHp, Para = cmd.MaxHp });
                 Console.WriteLine($"[RS] General side {grp}: HP={cmd.MaxHp} bot={cmd.IsBot}");
@@ -3884,7 +3931,9 @@ public class RoomServer : GameServer
         {
             bot.CurHp = bot.MaxHp;
             BroadcastToRoom(room, new PK_RC_PVE_SkillBroadcast { PlayerGUID = bot.PlayerGUID, SkillID = 1, Vec = new float[3] });
-            BroadcastToRoom(room, new PK_RC_SynHP { AttackerGUID = 0, PlayerGUID = bot.PlayerGUID, CurHp = bot.CurHp, Reason = 0 });
+            // ВАЖНО: в PVEGame.OnSynHP клиент ищет и PlayerGUID, и AttackPlayerGuid в списке игроков комнаты;
+            // при AttackerGUID=0 клиент дропает пакет и HP не обновляется! Передаём GUID самого танка.
+            BroadcastToRoom(room, new PK_RC_SynHP { AttackerGUID = bot.PlayerGUID, PlayerGUID = bot.PlayerGUID, CurHp = bot.CurHp, Reason = 0 });
             bot.BotSkillRepairCd = now.AddSeconds(28);
             return;
         }
@@ -3928,6 +3977,15 @@ public class RoomServer : GameServer
             });
             return;
         }
+        if (skill == 6 && now < caster.BomberCdUntil)
+        {
+            session.Send(new PK_RC_PVE_SkillReply
+            {
+                IsExecute = req.IsExecute, SkillID = req.SkillID,
+                RequestResult = 3 /* InCD */, CostType = req.CostType, fParam1 = req.Parameter1,
+            });
+            return;
+        }
 
         // AIM phase (IsExecute<=0): ALWAYS reply OK so the client opens the god-view /
         // aiming reticle (Katyusha). Don't charge here — charge on execute.
@@ -3960,6 +4018,8 @@ public class RoomServer : GameServer
         });
         if (skill == 5)
             caster.KatyushaCdUntil = now.AddSeconds(KatyushaCooldownSeconds);
+        else if (skill == 6)
+            caster.BomberCdUntil = now.AddSeconds(BomberCooldownSeconds);
         if (usedFreeBomber) caster.FreeBomberLeft--;
         else if (usedFreeKatyusha) caster.FreeKatyushaLeft--;
         else
@@ -3984,9 +4044,11 @@ public class RoomServer : GameServer
 
         switch (skill)
         {
-            case 1: // Repair — restore caster to full durability
+            case 1: // Repair — restore caster to full durability + repair modules & extinguish fire
                 caster.CurHp = caster.MaxHp;
-                BroadcastToRoom(room, new PK_RC_SynHP { AttackerGUID = 0, PlayerGUID = caster.PlayerGUID, CurHp = caster.CurHp, Reason = 0 });
+                // ВАЖНО: PVEGame.OnSynHP требует валидный AttackPlayerGuid (иначе игнорирует пакет!)
+                BroadcastToRoom(room, new PK_RC_SynHP { AttackerGUID = caster.PlayerGUID, PlayerGUID = caster.PlayerGUID, CurHp = caster.CurHp, Reason = 0 });
+                RepairAllPlayerModules(room, caster, extinguishFire: true);
                 Console.WriteLine($"[RS] Skill: {caster.PlayerGUID} repaired to {caster.CurHp}");
                 break;
             case 2: // Supply ammo — refill the magazine
@@ -4006,8 +4068,8 @@ public class RoomServer : GameServer
             case 5: // Katyusha — a volley whose damage lands rocket-by-rocket over ~1.6s
                 FireKatyusha(room, caster, vec[0], vec[2]);
                 break;
-            case 6: // Bomber — strike across the WHOLE map (no aim point; client sends 0,0)
-                ApplyMapStrike(room, caster, 2500);
+            case 6: // Bomber — strike across the WHOLE map (nerfed: 30s CD, < 30% MaxHp)
+                ApplyMapStrike(room, caster);
                 break;
             case 3: // Стимулятор / энергетик
             {
@@ -4078,6 +4140,9 @@ public class RoomServer : GameServer
 
     private const int KatyushaCooldownSeconds = 60;
     private const float KatyushaTotalHpFraction = 0.10f; // ~10% of target MaxHp across full 8-rocket volley
+    private const int BomberCooldownSeconds = 30;
+    private const float BomberHpFraction = 0.24f;        // ~24% of target MaxHp (strictly < 30%)
+    private const float BomberMaxHpCap = 0.29f;          // hard cap < 30% even with equipment bonuses
 
     // Katyusha: instead of one big instant hit, fire a volley — each rocket lands
     // slightly scattered around the aim over ~1.6s and deals ~1.25% of target MaxHp
@@ -4124,23 +4189,29 @@ public class RoomServer : GameServer
         Console.WriteLine($"[RS] Katyusha by {caster.PlayerGUID} at ({cx:0},{cz:0}) r={radius} hit {hits} enemies");
     }
 
-    // Bomber: damages every enemy on the map (there is no aim point).
-    private void ApplyMapStrike(BattleRoom room, RoomPlayer caster, int damage)
+    // Bomber: damages every enemy on the map proportionally (< 30% MaxHp) so it never insta-kills.
+    private void ApplyMapStrike(BattleRoom room, RoomPlayer caster)
     {
-        // "Направляющий локатор" (defense equip) uplifts the caster's bombardment damage.
-        if (caster.BombDamageMult != 1f)
-            damage = (int)MathF.Round(damage * caster.BombDamageMult);
         int hits = 0;
         foreach (var t in room.Players.Values.Where(t => t.Group != caster.Group && !t.IsDead).ToList())
         {
             hits++;
+            int dmg = ComputeBomberDamage(t.MaxHp, caster.BombDamageMult);
             ResolveHit(room, caster, t,
                 caster.CurrentShellId, 0,
                 t.PosX, t.PosY + 1f, t.PosZ,
                 0, 1, 0, 2, 0,
-                clientConfirmedPen: true, fixedDamage: damage);
+                clientConfirmedPen: true, fixedDamage: dmg);
         }
-        Console.WriteLine($"[RS] Bomber map strike by {caster.PlayerGUID} hit {hits} enemies");
+        Console.WriteLine($"[RS] Bomber map strike by {caster.PlayerGUID} hit {hits} enemies (<30% HP, cd={BomberCooldownSeconds}s)");
+    }
+
+    internal static int ComputeBomberDamage(int targetMaxHp, float bombDamageMult = 1f)
+    {
+        if (targetMaxHp <= 0) return 1;
+        int raw = (int)MathF.Round(targetMaxHp * BomberHpFraction * Math.Clamp(bombDamageMult, 0.5f, 1.5f));
+        int cap = Math.Max(1, (int)MathF.Floor(targetMaxHp * BomberMaxHpCap));
+        return Math.Clamp(raw, 1, cap);
     }
 
     // Fixed Defense wave roster (by tank table Id). Each wave spawns its OWN fresh
@@ -4182,11 +4253,13 @@ public class RoomServer : GameServer
         // Enemy wave bots: if the map defines AttackerSpawns (e.g. Stalingrad defense),
         // spawn across those attack points (round-robin) instead of a single team zone.
         float sx, sz;
+        int chosenSpawnSlot = 0;
         var _atk = GetMapConfig(room.MapId).AttackerSpawns;
         if (_atk != null && _atk.Length > 0)
         {
             int _i  = System.Threading.Interlocked.Increment(ref _attackerSpawnIdx);
-            var _pt = _atk[((_i % _atk.Length) + _atk.Length) % _atk.Length];
+            chosenSpawnSlot = ((_i % _atk.Length) + _atk.Length) % _atk.Length;
+            var _pt = _atk[chosenSpawnSlot];
             (sx, sz) = PickSpawnSpotNear(room, _pt.X, _pt.Z);
         }
         else
@@ -4207,6 +4280,7 @@ public class RoomServer : GameServer
             TankID = (ushort)(entry?.Id ?? 81), Tier = (byte)(entry?.Tier ?? 1),
             BattleRoomGUID = room.RoomGUID, IsBot = true, IsLoaded = true,
             Role = BotRole.Aggressive, Room = room,
+            Front = (chosenSpawnSlot % 2 == 0) ? BotFront.Left : BotFront.Right,
             LastYaw = GetSpawnYaw(room.MapId, group),
         };
         bot.MaxForwardSpeedMps = (entry?.Speed ?? 30f) / 3.6f;
@@ -6147,11 +6221,18 @@ public class RoomServer : GameServer
                     PlayerGUID = SystemChatGuid(room),
                     Message    = $"Прорыв! Жизней осталось: {room.PveDefenseLives}/{BattleRoom.PveInitLives}",
                 });
-                // Reset attacker to its spawn (using free obstacle-clear spot)
+                // Reset attacker to one of the 2 spawns (using free obstacle-clear spot)
                 var _atkReset = mapCfg.AttackerSpawns;
-                (bot.PosX, bot.PosZ) = (_atkReset != null && _atkReset.Length > 0)
-                    ? PickSpawnSpotNear(room, _atkReset[0].X, _atkReset[0].Z)
-                    : PickSpawnSpot(room, attackerGroup);
+                if (_atkReset != null && _atkReset.Length > 0)
+                {
+                    int rs = _random.Next(_atkReset.Length);
+                    (bot.PosX, bot.PosZ) = PickSpawnSpotNear(room, _atkReset[rs].X, _atkReset[rs].Z);
+                    bot.Front = (rs % 2 == 0) ? BotFront.Left : BotFront.Right;
+                }
+                else
+                {
+                    (bot.PosX, bot.PosZ) = PickSpawnSpot(room, attackerGroup);
+                }
                 bot.PosY            = SampleHeight(room, bot.PosX, bot.PosZ);
                 bot.LastYaw         = GetSpawnYaw(room.MapId, attackerGroup);
                 bot.FrontStage      = 0;
@@ -6535,6 +6616,56 @@ public class RoomServer : GameServer
         float targetSpeed = dirSign > 0 ? player.MaxForwardSpeedMps
                           : dirSign < 0 ? -player.MaxBackSpeedMps : 0f;
 
+        // Smooth ramming / collision damping:
+        // Previously the server ignored MoveState (1=ColliderStatic, 2=ColliderTank, 3=MoveTank)
+        // and echoed full MaxForwardSpeedMps back into the client while holding W, which forced
+        // Unity's TankColliderHandler to violently kick the tank backward every tick (jerking).
+        float yawRad = move.RotY * (MathF.PI / 180f);
+        float fwdX = MathF.Sin(yawRad);
+        float fwdZ = MathF.Cos(yawRad);
+        bool contactTank = move.MoveState == 2 || move.MoveState == 3;
+        bool contactStatic = move.MoveState == 1;
+        float pushCapMps = float.MaxValue;
+
+        if (player.Room != null && dirSign != 0)
+        {
+            float moveDirX = fwdX * dirSign;
+            float moveDirZ = fwdZ * dirSign;
+            const float contactRadius = SolidTankSpacing + 1.3f;
+            float r2 = contactRadius * contactRadius;
+            foreach (var other in player.Room.Players.Values)
+            {
+                if (ReferenceEquals(other, player)) continue;
+                if (MathF.Abs(other.PosY - player.PosY) > 4.0f) continue;
+                float ox = other.PosX - player.PosX;
+                float oz = other.PosZ - player.PosZ;
+                float d2 = ox * ox + oz * oz;
+                if (d2 >= r2) continue;
+                float d = MathF.Sqrt(MathF.Max(d2, 0.001f));
+                float toward = (ox / d) * moveDirX + (oz / d) * moveDirZ;
+                if (toward > 0.25f)
+                {
+                    contactTank = true;
+                    float weightRatio = Math.Clamp((float)Math.Max(1, player.MaxHp) / Math.Max(1, other.MaxHp), 0.25f, 1.5f);
+                    float cap = other.IsDead ? 0.6f : Math.Clamp(2.2f * weightRatio, 0.7f, 3.2f);
+                    if (cap < pushCapMps) pushCapMps = cap;
+                }
+            }
+        }
+
+        if (contactStatic)
+        {
+            targetSpeed = Math.Clamp(targetSpeed, -0.5f, 0.5f);
+            player.CurrentSpeedMps *= 0.35f;
+        }
+        else if (contactTank)
+        {
+            float cap = pushCapMps < float.MaxValue ? pushCapMps : 2.2f;
+            targetSpeed = Math.Clamp(targetSpeed, -cap, cap);
+            if (MathF.Abs(player.CurrentSpeedMps) > cap)
+                player.CurrentSpeedMps = Math.Clamp(player.CurrentSpeedMps * 0.55f, -cap, cap);
+        }
+
         var   now  = DateTime.UtcNow;
         float rawDt = player.LastDictateTime == default ? 0.1f
                       : (float)(now - player.LastDictateTime).TotalSeconds;
@@ -6542,16 +6673,16 @@ public class RoomServer : GameServer
         player.LastDictateTime = now;
 
         float accelDist = MathF.Abs(targetSpeed) > 0.01f ? MathF.Abs(targetSpeed) : player.MaxForwardSpeedMps;
-        float accelTime = MathF.Abs(targetSpeed) > 0.01f ? 3.0f : 1.0f;
-        float accel     = accelDist / accelTime;
+        float accelTime = (contactTank || contactStatic) ? 0.45f
+                        : (MathF.Abs(targetSpeed) > 0.01f ? 3.0f : 1.0f);
+        float accel     = MathF.Max(1f, accelDist) / accelTime;
         if (player.CurrentSpeedMps < targetSpeed)
             player.CurrentSpeedMps = Math.Min(targetSpeed, player.CurrentSpeedMps + accel * dt);
         else if (player.CurrentSpeedMps > targetSpeed)
             player.CurrentSpeedMps = Math.Max(targetSpeed, player.CurrentSpeedMps - accel * dt);
 
-        float yawRad = move.RotY * (MathF.PI / 180f);
-        float velX   = MathF.Sin(yawRad) * player.CurrentSpeedMps;
-        float velZ   = MathF.Cos(yawRad) * player.CurrentSpeedMps;
+        float velX   = fwdX * player.CurrentSpeedMps;
+        float velZ   = fwdZ * player.CurrentSpeedMps;
         player.SpeedX = velX;
         player.SpeedY = 0f;
         player.SpeedZ = velZ;
@@ -6576,6 +6707,68 @@ public class RoomServer : GameServer
         try { session.Send(fullMove); } catch { }
         if (player.Room != null)
             BroadcastBotMove(player.Room, player, fullMove, excludeGuid: player.PlayerGUID);
+    }
+
+    internal static (int EnemyDamage, int SelfDamage) ComputeRamDamage(int attackerMaxHp, int targetMaxHp, float relSpeedMps)
+    {
+        if (relSpeedMps < 2.2f) return (0, 0);
+        float speedFactor = Math.Clamp((relSpeedMps - 1.5f) / 10f, 0.12f, 1.8f);
+        float massRatio = Math.Clamp((float)Math.Max(200, attackerMaxHp) / Math.Max(200, targetMaxHp), 0.35f, 2.4f);
+        int baseHit = (int)MathF.Round(Math.Max(200, targetMaxHp) * 0.09f * speedFactor * massRatio);
+        int enemyDmg = Math.Clamp(baseHit, 10, Math.Max(15, (int)(targetMaxHp * 0.32f)));
+        int selfRaw = (int)MathF.Round(Math.Max(200, attackerMaxHp) * 0.045f * speedFactor / massRatio);
+        int selfDmg = Math.Clamp(selfRaw, 5, Math.Max(10, (int)(attackerMaxHp * 0.18f)));
+        return (enemyDmg, selfDmg);
+    }
+
+    private void HandleCrashDamage(GameSession session, PK_CR_CrashDamage crash)
+    {
+        if (!_players.TryGetValue(session.PlayerGUID, out var player)) return;
+        var room = player.Room;
+        if (room == null || room.BattleEnded || player.IsDead) return;
+        if (crash.OtherTankID == 0 || crash.OtherTankID == player.PlayerGUID) return;
+        if (!room.Players.TryGetValue(crash.OtherTankID, out var other) || other.IsDead) return;
+        if (other.Group == player.Group) return; // no friendly ram damage
+
+        float dist = Distance2D(player, other);
+        if (dist > 14f) return;
+
+        float relSpd = MathF.Abs(crash.TankRelSpd);
+        if (relSpd < 2.2f)
+        {
+            float rvx = player.SpeedX - other.SpeedX;
+            float rvz = player.SpeedZ - other.SpeedZ;
+            relSpd = MathF.Sqrt(rvx * rvx + rvz * rvz);
+        }
+        if (relSpd < 2.2f) return;
+
+        var now = DateTime.UtcNow;
+        lock (player.CrashLock)
+        {
+            if (player.LastCrashTimeByTarget.TryGetValue(other.PlayerGUID, out var prev)
+                && (now - prev).TotalSeconds < 0.55)
+                return;
+            player.LastCrashTimeByTarget[other.PlayerGUID] = now;
+        }
+
+        var (enemyDmg, selfDmg) = ComputeRamDamage(player.MaxHp, other.MaxHp, relSpd);
+        if (enemyDmg > 0)
+        {
+            ResolveHit(room, player, other,
+                player.CurrentShellId, 0,
+                other.PosX, other.PosY + 0.8f, other.PosZ,
+                0, 1, 0, 2, 0,
+                clientConfirmedPen: true, fixedDamage: enemyDmg);
+        }
+        if (selfDmg > 0 && !player.IsDead && relSpd >= 4.0f)
+        {
+            ResolveHit(room, other, player,
+                other.CurrentShellId, 0,
+                player.PosX, player.PosY + 0.8f, player.PosZ,
+                0, 1, 0, 2, 0,
+                clientConfirmedPen: true, fixedDamage: selfDmg);
+        }
+        Console.WriteLine($"[RS] Ramming: {player.PlayerGUID} -> {other.PlayerGUID} relSpd={relSpd:F1} enemyDmg={enemyDmg} selfDmg={selfDmg}");
     }
 
     private void HandleTankMove(GameSession session, PK_CR_SelfTankMove move)
@@ -6757,7 +6950,7 @@ public class RoomServer : GameServer
         {
             int heal = Math.Max(1, (int)(player.MaxHp * 0.10f));
             player.CurHp = Math.Min(player.MaxHp, player.CurHp + heal);
-            BroadcastToRoom(room, new PK_RC_SynHP { AttackerGUID = 0, PlayerGUID = player.PlayerGUID, CurHp = player.CurHp, Reason = 0 });
+            BroadcastToRoom(room, new PK_RC_SynHP { AttackerGUID = player.PlayerGUID, PlayerGUID = player.PlayerGUID, CurHp = player.CurHp, Reason = 0 });
             RepairAllPlayerModules(room, player, extinguishFire: true);
         }
         else if (actionId == 3) // Extinguisher (id 2, 4)
@@ -8108,7 +8301,7 @@ public class RoomServer : GameServer
                         });
                         BroadcastToRoom(room, new PK_RC_SynHP
                         {
-                            AttackerGUID = 0, PlayerGUID = target.PlayerGUID,
+                            AttackerGUID = target.PlayerGUID, PlayerGUID = target.PlayerGUID,
                             CurHp = target.CurHp, Reason = 0,
                         });
                     });
@@ -8169,7 +8362,7 @@ public class RoomServer : GameServer
                         });
                         BroadcastToRoom(room, new PK_RC_SynHP
                         {
-                            AttackerGUID = 0, PlayerGUID = deadBot.PlayerGUID,
+                            AttackerGUID = deadBot.PlayerGUID, PlayerGUID = deadBot.PlayerGUID,
                             CurHp = deadBot.CurHp, Reason = 0,
                         });
                         // ── v18 (баг 3): вернуть возрождённого бота в ВИДИМОСТЬ ──────
@@ -9036,6 +9229,9 @@ public class RoomPlayer
     public int      FreeBomberLeft     { get; set; } = 1;
     public int      FreeKatyushaLeft   { get; set; } = 1;
     public DateTime KatyushaCdUntil    { get; set; }
+    public DateTime BomberCdUntil      { get; set; }
+    public object   CrashLock          { get; } = new();
+    public Dictionary<long, DateTime> LastCrashTimeByTarget { get; } = new();
     public int      ReviveCount        { get; set; }   // возрождений
     public int[]    SkillUseCount      { get; } = new int[8]; // индекс = базовый id скилла 1..7
     public HashSet<long> DamagedEnemyGuids { get; } = new(); // «повреждено врагов»

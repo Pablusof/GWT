@@ -109,6 +109,17 @@ public class FriendRepository
         return null;
     }
 
+    public List<long> GetOwnersHavingFriend(long targetFriendGuid)
+    {
+        var owners = new List<long>();
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = "SELECT PlayerGUID FROM Friends WHERE FriendGUID = @fg";
+        cmd.Parameters.AddWithValue("@fg", targetFriendGuid);
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read()) owners.Add(reader.GetInt64(0));
+        return owners;
+    }
+
     private static Friend MapFriend(SqliteDataReader reader)
     {
         return new Friend

@@ -188,6 +188,15 @@ public class CorpsRepository
         cmd.ExecuteNonQuery();
     }
 
+    public void UpdateCorpsNotice(long corpsGuid, string notice)
+    {
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = "UPDATE Corps SET Notice = @notice WHERE CorpsGUID = @cg";
+        cmd.Parameters.AddWithValue("@notice", notice);
+        cmd.Parameters.AddWithValue("@cg", corpsGuid);
+        cmd.ExecuteNonQuery();
+    }
+
     public void UpdateCorpsTipName(long corpsGuid, string tipName)
     {
         using var cmd = _db.Connection.CreateCommand();

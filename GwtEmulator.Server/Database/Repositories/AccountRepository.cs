@@ -84,6 +84,31 @@ public class AccountRepository
         return list;
     }
 
+    public List<Account> SearchAccountsByName(string query, int limit = 20)
+    {
+        var list = new List<Account>();
+        using var cmd = _db.Connection.CreateCommand();
+        string trimmed = (query ?? string.Empty).Trim();
+        if (string.IsNullOrEmpty(trimmed))
+        {
+            cmd.CommandText = "SELECT * FROM Accounts ORDER BY LastLogin DESC LIMIT @limit";
+        }
+        else
+        {
+            cmd.CommandText = @"
+                SELECT * FROM Accounts
+                WHERE LOWER(PlayerName) LIKE LOWER(@q) OR LOWER(Username) LIKE LOWER(@q)
+                ORDER BY CASE WHEN LOWER(PlayerName) = LOWER(@exact) THEN 0 ELSE 1 END, LastLogin DESC
+                LIMIT @limit";
+            cmd.Parameters.AddWithValue("@q", $"%{trimmed}%");
+            cmd.Parameters.AddWithValue("@exact", trimmed);
+        }
+        cmd.Parameters.AddWithValue("@limit", Math.Clamp(limit, 1, 50));
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read()) list.Add(MapAccount(reader));
+        return list;
+    }
+
     public string? GetNicknameByPersId(string persId)
     {
         if (string.IsNullOrWhiteSpace(persId)) return null;

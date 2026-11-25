@@ -585,15 +585,30 @@ public class PK_CH_HallChat : BaseRequest
 [MessagePortal(TkMsgType.NM_HC_HALL_CHAT_RES)]
 public class PK_HC_HallChatRes : BaseRequest
 {
+    // Matches client PK_HC_HallChatRes.ReadByte:
+    //   ChatType(byte) + PK_ChatContent { PlayerGUID(long), PlayerName(UTF 64), Context(UTF) }
+    public byte ChatType = 2; // HallChatType: 0=PRIVATE, 1=TO_CORPS, 2=TO_HALL, 4=TO_TEAM
+    public long PlayerGUID;
     public string PlayerName = string.Empty;
     public string Message = string.Empty;
 
     public PK_HC_HallChatRes() => MsgType = TkMsgType.NM_HC_HALL_CHAT_RES;
 
+    public override IRequest ReadByte(ByteArray byteArray)
+    {
+        ChatType = byteArray.ReadByte();
+        PlayerGUID = byteArray.ReadLong();
+        PlayerName = byteArray.ReadUTF(64);
+        Message = byteArray.ReadUTF();
+        return this;
+    }
+
     public override void WriteByte(ByteArray byteArray)
     {
-        byteArray.WriteUTF(PlayerName, 64);
-        byteArray.WriteUTF(Message);
+        byteArray.WriteByte(ChatType);
+        byteArray.WriteLong(PlayerGUID);
+        byteArray.WriteUTF(PlayerName ?? string.Empty, 64);
+        byteArray.WriteUTF(Message ?? string.Empty);
     }
 }
 
@@ -4631,40 +4646,106 @@ public class PK_HC_Set_Garage_Background : BaseRequest
     public override void WriteByte(ByteArray byteArray) { byteArray.WriteByte(Result); byteArray.WriteInt(TargetIndex); }
 }
 
+public struct TeamMemberEntry
+{
+    public long Guid;
+    public byte Order;
+    public string UserName;
+    public short TankId;
+    public byte IsReady;
+    public byte IsEliteState;
+    public int Extra;
+}
+
 [MessagePortal(TkMsgType.NM_CH_Team_Ready)]
 public class PK_CH_Team_Ready : BaseRequest
 {
     public byte ReadyState;
+    public long TankGuid;
     public PK_CH_Team_Ready() => MsgType = TkMsgType.NM_CH_Team_Ready;
-    public override IRequest ReadByte(ByteArray byteArray) { ReadyState = byteArray.ReadByte(); return this; }
-    public override void WriteByte(ByteArray byteArray) => byteArray.WriteByte(ReadyState);
+    public override IRequest ReadByte(ByteArray byteArray)
+    {
+        ReadyState = byteArray.ReadByte();
+        TankGuid = byteArray.ReadLong();
+        return this;
+    }
+    public override void WriteByte(ByteArray byteArray)
+    {
+        byteArray.WriteByte(ReadyState);
+        byteArray.WriteLong(TankGuid);
+    }
 }
 
 [MessagePortal(TkMsgType.NM_CH_Invite_Team)]
 public class PK_CH_Invite_Team : BaseRequest
 {
+    public long PlayerGuid;
     public string PlayerName = string.Empty;
+    public byte HSIndex;
     public PK_CH_Invite_Team() => MsgType = TkMsgType.NM_CH_Invite_Team;
-    public override IRequest ReadByte(ByteArray byteArray) { PlayerName = byteArray.ReadUTF(64); return this; }
-    public override void WriteByte(ByteArray byteArray) => byteArray.WriteUTF(PlayerName, 64);
+    public override IRequest ReadByte(ByteArray byteArray)
+    {
+        PlayerGuid = byteArray.ReadLong();
+        PlayerName = byteArray.ReadUTF(64);
+        HSIndex = byteArray.ReadByte();
+        return this;
+    }
+    public override void WriteByte(ByteArray byteArray)
+    {
+        byteArray.WriteLong(PlayerGuid);
+        byteArray.WriteUTF(PlayerName ?? string.Empty, 64);
+        byteArray.WriteByte(HSIndex);
+    }
 }
 
 [MessagePortal(TkMsgType.NM_HC_Be_Invite_Team)]
 public class PK_HC_Be_Invite_Team : BaseRequest
 {
-    public string InviterName = string.Empty; public byte BattleMode;
+    public long TeamGuid;
+    public long PlayerGuid;
+    public string InviterName = string.Empty;
+    public uint InviteDate;
+    public int BattleMode;
     public PK_HC_Be_Invite_Team() => MsgType = TkMsgType.NM_HC_Be_Invite_Team;
-    public override IRequest ReadByte(ByteArray byteArray) { InviterName = byteArray.ReadUTF(64); BattleMode = byteArray.ReadByte(); return this; }
-    public override void WriteByte(ByteArray byteArray) { byteArray.WriteUTF(InviterName, 64); byteArray.WriteByte(BattleMode); }
+    public override IRequest ReadByte(ByteArray byteArray)
+    {
+        TeamGuid = byteArray.ReadLong();
+        PlayerGuid = byteArray.ReadLong();
+        InviterName = byteArray.ReadUTF(64);
+        InviteDate = byteArray.ReadUInt();
+        BattleMode = byteArray.ReadInt();
+        return this;
+    }
+    public override void WriteByte(ByteArray byteArray)
+    {
+        byteArray.WriteLong(TeamGuid);
+        byteArray.WriteLong(PlayerGuid);
+        byteArray.WriteUTF(InviterName ?? string.Empty, 64);
+        byteArray.WriteUInt(InviteDate);
+        byteArray.WriteInt(BattleMode);
+    }
 }
 
 [MessagePortal(TkMsgType.NM_CH_Join_Team)]
 public class PK_CH_Join_Team : BaseRequest
 {
+    public long PlayerGuid;
+    public long TankGuid;
     public long TeamGuid;
     public PK_CH_Join_Team() => MsgType = TkMsgType.NM_CH_Join_Team;
-    public override IRequest ReadByte(ByteArray byteArray) { TeamGuid = byteArray.ReadLong(); return this; }
-    public override void WriteByte(ByteArray byteArray) => byteArray.WriteLong(TeamGuid);
+    public override IRequest ReadByte(ByteArray byteArray)
+    {
+        PlayerGuid = byteArray.ReadLong();
+        TankGuid = byteArray.ReadLong();
+        TeamGuid = byteArray.ReadLong();
+        return this;
+    }
+    public override void WriteByte(ByteArray byteArray)
+    {
+        byteArray.WriteLong(PlayerGuid);
+        byteArray.WriteLong(TankGuid);
+        byteArray.WriteLong(TeamGuid);
+    }
 }
 
 [MessagePortal(TkMsgType.NM_CH_Leave_Team)]
@@ -4673,10 +4754,11 @@ public class PK_CH_Leave_Team : BaseRequest { public PK_CH_Leave_Team() => MsgTy
 [MessagePortal(TkMsgType.NM_HC_Leave_Team)]
 public class PK_HC_Leave_Team : BaseRequest
 {
-    public long PlayerGuid;
+    // Client PK_HC_Leave_Team.ReadByte reads a single byte (Word).
+    public byte Word;
     public PK_HC_Leave_Team() => MsgType = TkMsgType.NM_HC_Leave_Team;
-    public override IRequest ReadByte(ByteArray byteArray) { PlayerGuid = byteArray.ReadLong(); return this; }
-    public override void WriteByte(ByteArray byteArray) => byteArray.WriteLong(PlayerGuid);
+    public override IRequest ReadByte(ByteArray byteArray) { Word = byteArray.ReadByte(); return this; }
+    public override void WriteByte(ByteArray byteArray) => byteArray.WriteByte(Word);
 }
 
 [MessagePortal(TkMsgType.NM_CH_Kick_Team)]
@@ -4691,10 +4773,21 @@ public class PK_CH_Kick_Team : BaseRequest
 [MessagePortal(TkMsgType.NM_CH_Create_Team)]
 public class PK_CH_Create_Team : BaseRequest
 {
-    public byte BattleMode; public byte BattleLevel;
+    // Matches client PK_CH_Create_Team.WriteByte: TankGuid(long) + ConvertModeToServer(BattleMode)(byte)
+    public long TankGuid;
+    public byte BattleMode;
     public PK_CH_Create_Team() => MsgType = TkMsgType.NM_CH_Create_Team;
-    public override IRequest ReadByte(ByteArray byteArray) { BattleMode = byteArray.ReadByte(); BattleLevel = byteArray.ReadByte(); return this; }
-    public override void WriteByte(ByteArray byteArray) { byteArray.WriteByte(BattleMode); byteArray.WriteByte(BattleLevel); }
+    public override IRequest ReadByte(ByteArray byteArray)
+    {
+        TankGuid = byteArray.ReadLong();
+        BattleMode = byteArray.ReadByte();
+        return this;
+    }
+    public override void WriteByte(ByteArray byteArray)
+    {
+        byteArray.WriteLong(TankGuid);
+        byteArray.WriteByte(BattleMode);
+    }
 }
 
 [MessagePortal(TkMsgType.NM_CH_Team_Change_Mode)]
@@ -4709,12 +4802,63 @@ public class PK_CH_Team_Change_Mode : BaseRequest
 [MessagePortal(TkMsgType.NM_HC_Team_Info)]
 public class PK_HC_Team_Info : BaseRequest
 {
-    public long TeamGuid; public byte BattleMode; public byte MemberCount; public byte MaxMemberCount;
+    // Matches client PK_HC_Team_Info.ReadByte:
+    //   TeamGuid(long), LeaderGuid(long), IsEnterFree(byte), BattleMode(byte -> ConvertModeFromServer),
+    //   MaxSize(byte), MemberCount(byte), [Guid(long), Order(byte), UserName(UTF 64), TankID(short), IsReady(byte), IsEliteState(byte), Extra(int)]*Count
+    public long TeamGuid;
+    public long LeaderGuid;
+    public byte IsEnterFree;
+    public byte BattleMode;
+    public byte MaxMemberCount = 3;
+    public TeamMemberEntry[] Members = System.Array.Empty<TeamMemberEntry>();
+
     public PK_HC_Team_Info() => MsgType = TkMsgType.NM_HC_Team_Info;
+
     public override IRequest ReadByte(ByteArray byteArray)
-    { TeamGuid = byteArray.ReadLong(); BattleMode = byteArray.ReadByte(); MemberCount = byteArray.ReadByte(); MaxMemberCount = byteArray.ReadByte(); return this; }
+    {
+        TeamGuid = byteArray.ReadLong();
+        LeaderGuid = byteArray.ReadLong();
+        IsEnterFree = byteArray.ReadByte();
+        BattleMode = byteArray.ReadByte();
+        MaxMemberCount = byteArray.ReadByte();
+        byte count = byteArray.ReadByte();
+        Members = new TeamMemberEntry[count];
+        for (int i = 0; i < count; i++)
+        {
+            Members[i] = new TeamMemberEntry
+            {
+                Guid = byteArray.ReadLong(),
+                Order = byteArray.ReadByte(),
+                UserName = byteArray.ReadUTF(64),
+                TankId = byteArray.ReadShort(),
+                IsReady = byteArray.ReadByte(),
+                IsEliteState = byteArray.ReadByte(),
+                Extra = byteArray.ReadInt(),
+            };
+        }
+        return this;
+    }
+
     public override void WriteByte(ByteArray byteArray)
-    { byteArray.WriteLong(TeamGuid); byteArray.WriteByte(BattleMode); byteArray.WriteByte(MemberCount); byteArray.WriteByte(MaxMemberCount); }
+    {
+        byteArray.WriteLong(TeamGuid);
+        byteArray.WriteLong(LeaderGuid);
+        byteArray.WriteByte(IsEnterFree);
+        byteArray.WriteByte(BattleMode);
+        byteArray.WriteByte(MaxMemberCount);
+        byte count = (byte)Math.Min(Members?.Length ?? 0, 255);
+        byteArray.WriteByte(count);
+        for (int i = 0; i < count; i++)
+        {
+            byteArray.WriteLong(Members![i].Guid);
+            byteArray.WriteByte(Members[i].Order);
+            byteArray.WriteUTF(Members[i].UserName ?? string.Empty, 64);
+            byteArray.WriteShort(Members[i].TankId);
+            byteArray.WriteByte(Members[i].IsReady);
+            byteArray.WriteByte(Members[i].IsEliteState);
+            byteArray.WriteInt(Members[i].Extra);
+        }
+    }
 }
 
 [MessagePortal(TkMsgType.NM_CH_Quick_Match)]
@@ -4765,19 +4909,34 @@ public class PK_HC_Free_Team : BaseRequest
 [MessagePortal(TkMsgType.NM_CH_Be_Invite_Team_Ret)]
 public class PK_CH_Be_Invite_Team_Ret : BaseRequest
 {
+    public long TeamGuid;
     public byte AcceptState;
+    public long TankGuid;
     public PK_CH_Be_Invite_Team_Ret() => MsgType = TkMsgType.NM_CH_Be_Invite_Team_Ret;
-    public override IRequest ReadByte(ByteArray byteArray) { AcceptState = byteArray.ReadByte(); return this; }
-    public override void WriteByte(ByteArray byteArray) => byteArray.WriteByte(AcceptState);
+    public override IRequest ReadByte(ByteArray byteArray)
+    {
+        TeamGuid = byteArray.ReadLong();
+        AcceptState = byteArray.ReadByte();
+        TankGuid = byteArray.ReadLong();
+        return this;
+    }
+    public override void WriteByte(ByteArray byteArray)
+    {
+        byteArray.WriteLong(TeamGuid);
+        byteArray.WriteByte(AcceptState);
+        byteArray.WriteLong(TankGuid);
+    }
 }
 
 [MessagePortal(TkMsgType.NM_HC_Confirm_Ready)]
 public class PK_HC_Confirm_Ready : BaseRequest
 {
-    public long PlayerGuid; public byte ReadyState;
+    // Matches client PK_HC_Confirm_Ready.ReadByte: PlayerGuid(long) + TankID(short)
+    public long PlayerGuid;
+    public short TankId;
     public PK_HC_Confirm_Ready() => MsgType = TkMsgType.NM_HC_Confirm_Ready;
-    public override IRequest ReadByte(ByteArray byteArray) { PlayerGuid = byteArray.ReadLong(); ReadyState = byteArray.ReadByte(); return this; }
-    public override void WriteByte(ByteArray byteArray) { byteArray.WriteLong(PlayerGuid); byteArray.WriteByte(ReadyState); }
+    public override IRequest ReadByte(ByteArray byteArray) { PlayerGuid = byteArray.ReadLong(); TankId = byteArray.ReadShort(); return this; }
+    public override void WriteByte(ByteArray byteArray) { byteArray.WriteLong(PlayerGuid); byteArray.WriteShort(TankId); }
 }
 
 [MessagePortal(TkMsgType.NM_HC_Cancel_Ready)]
@@ -5425,22 +5584,152 @@ public class PK_CH_CORPS_MOD_NAME : BaseRequest
     public override void WriteByte(ByteArray byteArray) { byteArray.WriteLong(CorpsId); byteArray.WriteUTF(CorpsName, 21); }
 }
 
+[MessagePortal(TkMsgType.NM_CR_CrashDamage)]
+public class PK_CR_CrashDamage : BaseRequest
+{
+    // Matches client PK_CR_CrashDamage.WriteByte:
+    //   CrashType(byte), OtherTankID(long), MyCrashPart(byte), OtherCrashPart(byte), TankRelSpd(float)
+    public byte CrashType;
+    public long OtherTankID;
+    public byte MyCrashPart;
+    public byte OtherCrashPart;
+    public float TankRelSpd;
+
+    public PK_CR_CrashDamage() => MsgType = TkMsgType.NM_CR_CrashDamage;
+
+    public override IRequest ReadByte(ByteArray byteArray)
+    {
+        CrashType = byteArray.ReadByte();
+        OtherTankID = byteArray.ReadLong();
+        MyCrashPart = byteArray.ReadByte();
+        OtherCrashPart = byteArray.ReadByte();
+        TankRelSpd = byteArray.ReadFloat();
+        return this;
+    }
+
+    public override void WriteByte(ByteArray byteArray)
+    {
+        byteArray.WriteByte(CrashType);
+        byteArray.WriteLong(OtherTankID);
+        byteArray.WriteByte(MyCrashPart);
+        byteArray.WriteByte(OtherCrashPart);
+        byteArray.WriteFloat(TankRelSpd);
+    }
+}
+
+[MessagePortal(TkMsgType.NM_CHW_CORPS_APPLICATION)]
+public class PK_CHW_CORPS_APPLICATION : BaseRequest
+{
+    // Matches client PK_CH_NM_CHW_CORPS_APPLICATION: GUID(long), TroopsId(long)
+    public long PlayerGuid;
+    public long CorpsId;
+    public PK_CHW_CORPS_APPLICATION() => MsgType = TkMsgType.NM_CHW_CORPS_APPLICATION;
+    public override IRequest ReadByte(ByteArray ba) { PlayerGuid = ba.ReadLong(); CorpsId = ba.ReadLong(); return this; }
+    public override void WriteByte(ByteArray ba) { ba.WriteLong(PlayerGuid); ba.WriteLong(CorpsId); }
+}
+
+[MessagePortal(TkMsgType.NM_CHW_CORPS_MOD_ANNOUCEMENT)]
+public class PK_CHW_CORPS_MOD_ANNOUCEMENT : BaseRequest
+{
+    // Matches client PK_CH_NM_CHW_CORPS_MOD_ANNOUCEMENT: GUID(long), NoticeContent(UTF 200)
+    public long PlayerGuid;
+    public string NoticeContent = string.Empty;
+    public PK_CHW_CORPS_MOD_ANNOUCEMENT() => MsgType = TkMsgType.NM_CHW_CORPS_MOD_ANNOUCEMENT;
+    public override IRequest ReadByte(ByteArray ba) { PlayerGuid = ba.ReadLong(); NoticeContent = ba.ReadUTF(200); return this; }
+    public override void WriteByte(ByteArray ba) { ba.WriteLong(PlayerGuid); ba.WriteUTF(NoticeContent ?? string.Empty, 200); }
+}
+
+[MessagePortal(TkMsgType.NM_CHW_CORPS_INVITE)]
+public class PK_CHW_CORPS_INVITE : BaseRequest
+{
+    // Matches client PK_CHW_CorpsMemOperateInvite: PlayerGuid(long), MemGuid(long)
+    public long PlayerGuid;
+    public long MemGuid;
+    public PK_CHW_CORPS_INVITE() => MsgType = TkMsgType.NM_CHW_CORPS_INVITE;
+    public override IRequest ReadByte(ByteArray ba) { PlayerGuid = ba.ReadLong(); MemGuid = ba.ReadLong(); return this; }
+    public override void WriteByte(ByteArray ba) { ba.WriteLong(PlayerGuid); ba.WriteLong(MemGuid); }
+}
+
+[MessagePortal(TkMsgType.NM_WHC_UPDATE_FRIEND)]
+public class PK_WHC_UpdateFriendState : BaseRequest
+{
+    // Matches client PK_WHC_UpdateFriendState:
+    //   Guid(long) + FriendInfo { Guid(long), Name(UTF 64), PlayerRelation(int), OnlineState(byte), HSIndex(byte), TeamGUID(long) }
+    public long PlayerGUID;
+    public FriendInfoData FriendInfo;
+
+    public PK_WHC_UpdateFriendState() => MsgType = TkMsgType.NM_WHC_UPDATE_FRIEND;
+
+    public override IRequest ReadByte(ByteArray byteArray)
+    {
+        PlayerGUID = byteArray.ReadLong();
+        FriendInfo = new FriendInfoData
+        {
+            FriendGUID = byteArray.ReadLong(),
+            FriendName = byteArray.ReadUTF(64),
+            RelationType = byteArray.ReadInt(),
+            OnlineState = byteArray.ReadByte(),
+            HSIndex = byteArray.ReadByte(),
+            TeamGUID = byteArray.ReadLong(),
+        };
+        return this;
+    }
+
+    public override void WriteByte(ByteArray byteArray)
+    {
+        byteArray.WriteLong(PlayerGUID);
+        byteArray.WriteLong(FriendInfo.FriendGUID);
+        byteArray.WriteUTF(FriendInfo.FriendName ?? string.Empty, 64);
+        byteArray.WriteInt(FriendInfo.RelationType);
+        byteArray.WriteByte(FriendInfo.OnlineState);
+        byteArray.WriteByte(FriendInfo.HSIndex);
+        byteArray.WriteLong(FriendInfo.TeamGUID);
+    }
+}
+
 [MessagePortal(TkMsgType.NM_CHW_CORPS_APPLICATION_REQ)]
 public class PK_CHW_CORPS_APPLICATION_REQ : BaseRequest
 {
-    public long CorpsId; public ushort Bias;
+    // Matches client PK_CHW_CorpsAppListReq: PlayerGuid(long) + Bias(ushort)
+    public long PlayerGuid;
+    public ushort Bias;
     public PK_CHW_CORPS_APPLICATION_REQ() => MsgType = TkMsgType.NM_CHW_CORPS_APPLICATION_REQ;
-    public override IRequest ReadByte(ByteArray ba) { CorpsId = ba.ReadLong(); Bias = ba.ReadUShort(); return this; }
-    public override void WriteByte(ByteArray ba) { ba.WriteLong(CorpsId); ba.WriteUShort(Bias); }
+    public override IRequest ReadByte(ByteArray ba) { PlayerGuid = ba.ReadLong(); Bias = ba.ReadUShort(); return this; }
+    public override void WriteByte(ByteArray ba) { ba.WriteLong(PlayerGuid); ba.WriteUShort(Bias); }
 }
 
 [MessagePortal(TkMsgType.NM_CHW_CORPS_APPLICATION_REP)]
 public class PK_CHW_CORPS_APPLICATION_REP : BaseRequest
 {
-    public long ApplicantGuid; public byte AcceptState;
+    // Matches client PK_CH_CropsApplicationRep:
+    //   UserGUID(long), TroopsID(long), Type(byte), State(byte), Count(int), JoinGUIDList[Count](long)
+    public long UserGUID;
+    public long TroopsID;
+    public byte Type;
+    public byte State;
+    public long[] JoinGUIDList = System.Array.Empty<long>();
     public PK_CHW_CORPS_APPLICATION_REP() => MsgType = TkMsgType.NM_CHW_CORPS_APPLICATION_REP;
-    public override IRequest ReadByte(ByteArray byteArray) { ApplicantGuid = byteArray.ReadLong(); AcceptState = byteArray.ReadByte(); return this; }
-    public override void WriteByte(ByteArray byteArray) { byteArray.WriteLong(ApplicantGuid); byteArray.WriteByte(AcceptState); }
+    public override IRequest ReadByte(ByteArray byteArray)
+    {
+        UserGUID = byteArray.ReadLong();
+        TroopsID = byteArray.ReadLong();
+        Type = byteArray.ReadByte();
+        State = byteArray.ReadByte();
+        int count = Math.Clamp(byteArray.ReadInt(), 0, 100);
+        JoinGUIDList = new long[count];
+        for (int i = 0; i < count; i++) JoinGUIDList[i] = byteArray.ReadLong();
+        return this;
+    }
+    public override void WriteByte(ByteArray byteArray)
+    {
+        byteArray.WriteLong(UserGUID);
+        byteArray.WriteLong(TroopsID);
+        byteArray.WriteByte(Type);
+        byteArray.WriteByte(State);
+        byteArray.WriteInt(JoinGUIDList?.Length ?? 0);
+        if (JoinGUIDList != null)
+            foreach (var g in JoinGUIDList) byteArray.WriteLong(g);
+    }
 }
 
 [MessagePortal(TkMsgType.NM_CHW_CORPS_SEARCH)]
@@ -5508,10 +5797,24 @@ public class PK_CHW_CORPS_CLOSE : BaseRequest
 [MessagePortal(TkMsgType.NM_CHW_CORPS_INVITE_REP)]
 public class PK_CHW_CORPS_INVITE_REP : BaseRequest
 {
-    public long InviterGuid; public byte AcceptState;
+    // Matches client PK_CHW_CorpsInviteRep: PlayerGuid(long), InvitePlayerGuid(long), Flag(byte)
+    public long PlayerGuid;
+    public long InvitePlayerGuid;
+    public byte AcceptState;
     public PK_CHW_CORPS_INVITE_REP() => MsgType = TkMsgType.NM_CHW_CORPS_INVITE_REP;
-    public override IRequest ReadByte(ByteArray byteArray) { InviterGuid = byteArray.ReadLong(); AcceptState = byteArray.ReadByte(); return this; }
-    public override void WriteByte(ByteArray byteArray) { byteArray.WriteLong(InviterGuid); byteArray.WriteByte(AcceptState); }
+    public override IRequest ReadByte(ByteArray byteArray)
+    {
+        PlayerGuid = byteArray.ReadLong();
+        InvitePlayerGuid = byteArray.ReadLong();
+        AcceptState = byteArray.ReadByte();
+        return this;
+    }
+    public override void WriteByte(ByteArray byteArray)
+    {
+        byteArray.WriteLong(PlayerGuid);
+        byteArray.WriteLong(InvitePlayerGuid);
+        byteArray.WriteByte(AcceptState);
+    }
 }
 
 [MessagePortal(TkMsgType.NM_CHW_CORPS_ASSIGNMENT)]
@@ -5603,24 +5906,73 @@ public class PK_CHM_CorpsAth_AllowQuit : BaseRequest
 }
 
 [MessagePortal(TkMsgType.NM_CHW_FRIEND_UPDATE)]
-public class PK_CHW_FRIEND_UPDATE : BaseRequest { public PK_CHW_FRIEND_UPDATE() => MsgType = TkMsgType.NM_CHW_FRIEND_UPDATE; }
+public class PK_CHW_FRIEND_UPDATE : BaseRequest
+{
+    public long Flag;
+    public PK_CHW_FRIEND_UPDATE() => MsgType = TkMsgType.NM_CHW_FRIEND_UPDATE;
+    public override IRequest ReadByte(ByteArray byteArray) { Flag = byteArray.ReadLong(); return this; }
+    public override void WriteByte(ByteArray byteArray) => byteArray.WriteLong(Flag);
+}
 
 [MessagePortal(TkMsgType.NM_CHW_FRIEND_OPERATE)]
 public class PK_CHW_FRIEND_OPERATE : BaseRequest
 {
-    public byte OperType; public string FriendName = string.Empty;
+    // Matches client PK_CHW_FriendOperate: PlayerGUID(long), FriendGUID(long), OperateType(byte)
+    // OperateType: 0=AddFriend, 1=DeleteFriend, 2=AddBlock, 3=DeleteBlock
+    public long PlayerGUID;
+    public long FriendGUID;
+    public byte OperType;
     public PK_CHW_FRIEND_OPERATE() => MsgType = TkMsgType.NM_CHW_FRIEND_OPERATE;
-    public override IRequest ReadByte(ByteArray byteArray) { OperType = byteArray.ReadByte(); FriendName = byteArray.ReadUTF(64); return this; }
-    public override void WriteByte(ByteArray byteArray) { byteArray.WriteByte(OperType); byteArray.WriteUTF(FriendName, 64); }
+    public override IRequest ReadByte(ByteArray byteArray)
+    {
+        PlayerGUID = byteArray.ReadLong();
+        FriendGUID = byteArray.ReadLong();
+        OperType = byteArray.ReadByte();
+        return this;
+    }
+    public override void WriteByte(ByteArray byteArray)
+    {
+        byteArray.WriteLong(PlayerGUID);
+        byteArray.WriteLong(FriendGUID);
+        byteArray.WriteByte(OperType);
+    }
 }
 
 [MessagePortal(TkMsgType.NM_WHC_FRIEND_OPERATE_RES)]
 public class PK_WHC_FRIEND_OPERATE_RES : BaseRequest
 {
-    public byte OperType; public byte Result;
+    // Matches client PK_WHC_FriendOperateRes:
+    //   PlayerGUID(long), FriendInfoData(Guid, Name64, Relation int, OnlineState byte, HSIndex byte, TeamGUID long), OperateType(byte)
+    public long PlayerGUID;
+    public FriendInfoData FriendInfo;
+    public byte OperType;
     public PK_WHC_FRIEND_OPERATE_RES() => MsgType = TkMsgType.NM_WHC_FRIEND_OPERATE_RES;
-    public override IRequest ReadByte(ByteArray byteArray) { OperType = byteArray.ReadByte(); Result = byteArray.ReadByte(); return this; }
-    public override void WriteByte(ByteArray byteArray) { byteArray.WriteByte(OperType); byteArray.WriteByte(Result); }
+    public override IRequest ReadByte(ByteArray byteArray)
+    {
+        PlayerGUID = byteArray.ReadLong();
+        FriendInfo = new FriendInfoData
+        {
+            FriendGUID = byteArray.ReadLong(),
+            FriendName = byteArray.ReadUTF(64),
+            RelationType = byteArray.ReadInt(),
+            OnlineState = byteArray.ReadByte(),
+            HSIndex = byteArray.ReadByte(),
+            TeamGUID = byteArray.ReadLong(),
+        };
+        OperType = byteArray.ReadByte();
+        return this;
+    }
+    public override void WriteByte(ByteArray byteArray)
+    {
+        byteArray.WriteLong(PlayerGUID);
+        byteArray.WriteLong(FriendInfo.FriendGUID);
+        byteArray.WriteUTF(FriendInfo.FriendName ?? string.Empty, 64);
+        byteArray.WriteInt(FriendInfo.RelationType);
+        byteArray.WriteByte(FriendInfo.OnlineState);
+        byteArray.WriteByte(FriendInfo.HSIndex);
+        byteArray.WriteLong(FriendInfo.TeamGUID);
+        byteArray.WriteByte(OperType);
+    }
 }
 
 [MessagePortal(TkMsgType.NM_CHW_Domain_Bidding)]
@@ -5647,21 +5999,56 @@ public class PK_CHW_Domain_FightTime : BaseRequest { public PK_CHW_Domain_FightT
 [MessagePortal(TkMsgType.NM_CHW_PLAYER_QUERY)]
 public class PK_CHW_PLAYER_QUERY : BaseRequest
 {
+    // Matches client PK_CHW_PlayerQuery: PlayerGUID(long), Name(UTF 64)
+    public long PlayerGUID;
     public string PlayerName = string.Empty;
     public PK_CHW_PLAYER_QUERY() => MsgType = TkMsgType.NM_CHW_PLAYER_QUERY;
-    public override IRequest ReadByte(ByteArray byteArray) { PlayerName = byteArray.ReadUTF(64); return this; }
-    public override void WriteByte(ByteArray byteArray) => byteArray.WriteUTF(PlayerName, 64);
+    public override IRequest ReadByte(ByteArray byteArray)
+    {
+        PlayerGUID = byteArray.ReadLong();
+        PlayerName = byteArray.ReadUTF(64);
+        return this;
+    }
+    public override void WriteByte(ByteArray byteArray)
+    {
+        byteArray.WriteLong(PlayerGUID);
+        byteArray.WriteUTF(PlayerName ?? string.Empty, 64);
+    }
 }
 
 [MessagePortal(TkMsgType.NM_WHC_PLAYER_QUERY_RES)]
 public class PK_WHC_PLAYER_QUERY_RES : BaseRequest
 {
-    public long PlayerGuid; public string PlayerName = string.Empty; public int Level; public int BattleCap;
+    // Matches client PK_WHC_PlayerQueryRes: PlayerGUID(long), Count(int), [Guid(long), Name(UTF 64)]*Count
+    public long PlayerGUID;
+    public ChannelPlayerEntry[] Results = System.Array.Empty<ChannelPlayerEntry>();
     public PK_WHC_PLAYER_QUERY_RES() => MsgType = TkMsgType.NM_WHC_PLAYER_QUERY_RES;
     public override IRequest ReadByte(ByteArray byteArray)
-    { PlayerGuid = byteArray.ReadLong(); PlayerName = byteArray.ReadUTF(64); Level = byteArray.ReadInt(); BattleCap = byteArray.ReadInt(); return this; }
+    {
+        PlayerGUID = byteArray.ReadLong();
+        int count = Math.Clamp(byteArray.ReadInt(), 0, 100);
+        Results = new ChannelPlayerEntry[count];
+        for (int i = 0; i < count; i++)
+        {
+            Results[i] = new ChannelPlayerEntry
+            {
+                Guid = byteArray.ReadLong(),
+                Name = byteArray.ReadUTF(64),
+            };
+        }
+        return this;
+    }
     public override void WriteByte(ByteArray byteArray)
-    { byteArray.WriteLong(PlayerGuid); byteArray.WriteUTF(PlayerName, 64); byteArray.WriteInt(Level); byteArray.WriteInt(BattleCap); }
+    {
+        byteArray.WriteLong(PlayerGUID);
+        int count = Results?.Length ?? 0;
+        byteArray.WriteInt(count);
+        for (int i = 0; i < count; i++)
+        {
+            byteArray.WriteLong(Results![i].Guid);
+            byteArray.WriteUTF(Results[i].Name ?? string.Empty, 64);
+        }
+    }
 }
 
 [MessagePortal(TkMsgType.NM_CHW_CorpsBid_PlaceBid)]
@@ -6152,10 +6539,24 @@ public class PK_CH_HALLCHAT_ALL : BaseRequest
 [MessagePortal(TkMsgType.NM_CH_CHANNEL)]
 public class PK_CH_CHANNEL : BaseRequest
 {
-    public int ChannelId;
+    // Matches client PK_CH_Channel: PlayerGUID(long), HallChatType(byte), OperateType(byte: 1=Enter, 2=Exit)
+    public long PlayerGUID;
+    public byte HallChatType;
+    public byte OperateType;
     public PK_CH_CHANNEL() => MsgType = TkMsgType.NM_CH_CHANNEL;
-    public override IRequest ReadByte(ByteArray byteArray) { ChannelId = byteArray.ReadInt(); return this; }
-    public override void WriteByte(ByteArray byteArray) => byteArray.WriteInt(ChannelId);
+    public override IRequest ReadByte(ByteArray byteArray)
+    {
+        PlayerGUID = byteArray.ReadLong();
+        HallChatType = byteArray.ReadByte();
+        OperateType = byteArray.ReadByte();
+        return this;
+    }
+    public override void WriteByte(ByteArray byteArray)
+    {
+        byteArray.WriteLong(PlayerGUID);
+        byteArray.WriteByte(HallChatType);
+        byteArray.WriteByte(OperateType);
+    }
 }
 
 [MessagePortal(TkMsgType.NM_CH_EXCHANGE_TANKEXP)]

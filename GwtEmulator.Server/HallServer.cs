@@ -47,6 +47,33 @@ public class HallServer : GameServer
         public List<MatchEntry> Entries { get; } = new();
     }
 
+    private sealed class SquadMember
+    {
+        public required long PlayerGuid { get; init; }
+        public required string PlayerName { get; set; }
+        public required GameSession Session { get; set; }
+        public long TankGuid { get; set; }
+        public short VehicleId { get; set; }
+        public byte Order { get; set; }
+        public bool IsReady { get; set; }
+    }
+
+    private sealed class SquadInfo
+    {
+        public required long TeamGuid { get; init; }
+        public long LeaderGuid { get; set; }
+        public byte ServerBattleMode { get; set; } // server wire mode: 0=Std, 1=Relive, 2=Cmd, 3=Simplify, 5=Defense(PVE)
+        public byte IsEnterFree { get; set; } = 1;
+        public byte MaxSize { get; set; } = 3;
+        public List<SquadMember> Members { get; } = new();
+        public HashSet<long> InvitedGuids { get; } = new();
+    }
+
+    private static readonly object _squadLock = new();
+    private static readonly Dictionary<long, SquadInfo> _squadsByGuid = new();
+    private static readonly Dictionary<long, long> _playerSquadMap = new();
+    private static long _nextSquadSeq = 100000;
+
     // Waiting lobby per normalized mode (collects all players queueing within 20s) + active open rooms for hot-join.
     private static readonly Dictionary<byte, MatchLobby>  _waitingLobbies    = new();
     private static readonly Dictionary<byte, MatchEntry>  _activeRoomsByMode = new();
@@ -548,7 +575,7 @@ public class HallServer : GameServer
             case TkMsgType.NM_CH_Leave_Team: HandleLeaveTeam(session); break;
             case TkMsgType.NM_CH_Kick_Team: HandleKickTeam(session, (PK_CH_Kick_Team)message); break;
             case TkMsgType.NM_CH_Create_Team: HandleCreateTeam(session, (PK_CH_Create_Team)message); break;
-            case TkMsgType.NM_CH_Team_Change_Mode: HandleTeamChangeMode(session); break;
+            case TkMsgType.NM_CH_Team_Change_Mode: HandleTeamChangeMode(session, (PK_CH_Team_Change_Mode)message); break;
             case TkMsgType.NM_CH_Quick_Match: HandleQuickMatch(session, (PK_CH_Quick_Match)message); break;
             case TkMsgType.NM_CH_Cancel_Quick_Match:
                 lock (_matchLock) { RemovePlayerFromWaitingLobbiesLocked(session.PlayerGUID); }
@@ -557,7 +584,7 @@ public class HallServer : GameServer
                 break;
             case TkMsgType.NM_CH_Start_Match: HandleStartMatch(session); break;
             case TkMsgType.NM_CH_Set_Free_Team: HandleSetFreeTeam(session, (PK_CH_Set_Free_Team)message); break;
-            case TkMsgType.NM_CH_Be_Invite_Team_Ret: HandleBeInviteTeamRet(session); break;
+            case TkMsgType.NM_CH_Be_Invite_Team_Ret: HandleBeInviteTeamRet(session, (PK_CH_Be_Invite_Team_Ret)message); break;
             case TkMsgType.NM_CH_RespReconnect: HandleRespReconnect(session); break;
             case TkMsgType.NM_CH_CancleJoinRoom: HandleCancleJoinRoom(session); break;
             case TkMsgType.NM_CH_LotteryDraw: HandleLotteryDraw(session, (PK_CH_LotteryDraw)message); break;
@@ -609,9 +636,11 @@ public class HallServer : GameServer
             case TkMsgType.NM_CHW_CORPS_CREATE: HandleCorpsCreate(session, (PK_CHW_CORPS_CREATE)message); break;
             case TkMsgType.NM_CHW_CORPS_QUIT: HandleCorpsQuit(session, (PK_CHW_CORPS_QUIT)message); break;
             case TkMsgType.NM_CHW_CORPS_DISMISS: HandleCorpsDismiss(session, (PK_CHW_CORPS_DISMISS)message); break;
+            case TkMsgType.NM_CHW_CORPS_MOD_ANNOUCEMENT: HandleCorpsModAnnouncement(session, (PK_CHW_CORPS_MOD_ANNOUCEMENT)message); break;
             case TkMsgType.NM_CHW_CORPS_MOD_INTRODUCE: HandleCorpsModIntroduce(session, (PK_CHW_CORPS_MOD_INTRODUCE)message); break;
             case TkMsgType.NM_CH_CORPS_MOD_TIPNAME: HandleCorpsModTipName(session, (PK_CH_CORPS_MOD_TIPNAME)message); break;
             case TkMsgType.NM_CH_CORPS_MOD_NAME: HandleCorpsModName(session, (PK_CH_CORPS_MOD_NAME)message); break;
+            case TkMsgType.NM_CHW_CORPS_APPLICATION: HandleCorpsApply(session, (PK_CHW_CORPS_APPLICATION)message); break;
             case TkMsgType.NM_CHW_CORPS_APPLICATION_REQ: HandleCorpsApplicationReq(session, (PK_CHW_CORPS_APPLICATION_REQ)message); break;
             case TkMsgType.NM_CHW_CORPS_APPLICATION_REP: HandleCorpsApplicationRep(session, (PK_CHW_CORPS_APPLICATION_REP)message); break;
             case TkMsgType.NM_CHW_CORPS_SEARCH: HandleCorpsSearch(session, (PK_CHW_CORPS_SEARCH)message); break;
@@ -621,6 +650,7 @@ public class HallServer : GameServer
             case TkMsgType.NM_CHW_CORPS_COMMISSION: HandleCorpsCommission(session, (PK_CHW_CORPS_COMMISSION)message); break;
             case TkMsgType.NM_CHW_CORPS_EXPEL: HandleCorpsExpel(session, (PK_CHW_CORPS_EXPEL)message); break;
             case TkMsgType.NM_CHW_CORPS_CLOSE: HandleCorpsClose(session, (PK_CHW_CORPS_CLOSE)message); break;
+            case TkMsgType.NM_CHW_CORPS_INVITE: HandleCorpsInvite(session, (PK_CHW_CORPS_INVITE)message); break;
             case TkMsgType.NM_CHW_CORPS_INVITE_REP: HandleCorpsInviteRep(session, (PK_CHW_CORPS_INVITE_REP)message); break;
             case TkMsgType.NM_CHW_CORPS_ASSIGNMENT: HandleCorpsAssignment(session, (PK_CHW_CORPS_ASSIGNMENT)message); break;
             case TkMsgType.NM_CHW_Corps_Mod_TaxRate: HandleCorpsModTaxRate(session, (PK_CHW_Corps_Mod_TaxRate)message); break;
@@ -899,26 +929,12 @@ public class HallServer : GameServer
         }
 
         // Friend list - client adds self in FriendsManagerModel.ReCreate(), so only send actual friends
-        var friends = _friendRepo.GetFriends(data.PlayerGUID);
-        var friendList = new PK_WHC_FriendList
-        {
-            PlayerGUID = data.PlayerGUID,
-            FriendCount = friends.Count
-        };
-        friendList.Friends = new FriendInfoData[friends.Count];
-        for (int i = 0; i < friends.Count; i++)
-        {
-            friendList.Friends[i] = new FriendInfoData
-            {
-                FriendGUID = friends[i].FriendGUID,
-                FriendName = friends[i].FriendName,
-                RelationType = 0, // PlayerRelation.Friend
-                OnlineState = friends[i].IsOnline ? (byte)2 : (byte)1, // PS_ONLINE / PS_OFFLINE
-                HSIndex = 0,
-                TeamGUID = 0
-            };
-        }
-        session.Send(friendList);
+        SendFriendList(session, data.PlayerGUID);
+        // Notify everyone who has this player in their friend list that they are now online
+        BroadcastFriendStateChanged(data.PlayerGUID);
+        // Refresh public hall channel online player list for everyone & show online count in chat
+        BroadcastOnlineHallChannel();
+        SendOnlineSummaryToChat(session);
 
         SendMoneyExp(session, data);
         SendCasernUpdate(session, data.CasernCapacity);
@@ -1456,57 +1472,492 @@ public class HallServer : GameServer
         SendServerTimePacket(session);
     }
 
+    private static byte ConvertClientModeToServer(byte clientMode) => clientMode switch
+    {
+        3 => 4,
+        4 => 5, // PVE / Defense
+        5 => 6,
+        6 => 3, // Simplify
+        _ => clientMode,
+    };
+
+    private static byte ConvertServerModeToClient(byte serverMode) => serverMode switch
+    {
+        3 => 6,
+        4 => 3,
+        5 => 4, // PVE / Defense
+        6 => 5,
+        _ => serverMode,
+    };
+
+    private static byte MaxSquadSizeForServerMode(byte serverMode) =>
+        (serverMode == 4 || serverMode == 5) ? (byte)DefenseTeamCap : (byte)3;
+
+    private short ResolveVehicleId(long playerGuid, long tankGuid)
+    {
+        if (tankGuid != 0)
+        {
+            var t = _tankRepo.GetTankByGUID(tankGuid);
+            if (t != null && t.PlayerGUID == playerGuid) return (short)t.VehicleId;
+        }
+        long sel = GetSelectedTankGuid(playerGuid);
+        if (sel != 0)
+        {
+            var t = _tankRepo.GetTankByGUID(sel);
+            if (t != null) return (short)t.VehicleId;
+        }
+        return 81;
+    }
+
+    private static long GetPlayerSquadGuid(long playerGuid)
+    {
+        lock (_squadLock)
+            return _playerSquadMap.TryGetValue(playerGuid, out var tid) ? tid : 0;
+    }
+
+    private byte ComputePlayerOnlineState(long playerGuid)
+    {
+        if (!_hallByGuid.TryGetValue(playerGuid, out var s) || !s.IsConnected)
+            return 1; // PS_OFFLINE
+        lock (_matchLock)
+        {
+            foreach (var lob in _waitingLobbies.Values)
+                if (lob.Entries.Any(e => e.PlayerGuid == playerGuid))
+                    return 4; // PS_INWAITBATTLE
+        }
+        if (GetPlayerSquadGuid(playerGuid) != 0)
+            return 3; // PS_INTEAM
+        return 2; // PS_ONLINE
+    }
+
+    private static ChannelPlayerEntry[] GetOnlineChannelEntries()
+    {
+        return _hallByGuid.Values
+            .Where(s => s.IsConnected && s.PlayerGUID != 0)
+            .OrderBy(s => s.PlayerName, StringComparer.OrdinalIgnoreCase)
+            .Select(s => new ChannelPlayerEntry { Guid = s.PlayerGUID, Name = s.PlayerName })
+            .ToArray();
+    }
+
+    private static void BroadcastOnlineHallChannel()
+    {
+        var entries = GetOnlineChannelEntries();
+        foreach (var s in _hallByGuid.Values)
+        {
+            if (!s.IsConnected) continue;
+            try
+            {
+                s.Send(new PK_HC_Channel_Res
+                {
+                    PlayerGUID = s.PlayerGUID,
+                    HallChatType = 2, // TO_HALL
+                    Players = entries,
+                });
+            }
+            catch { }
+        }
+    }
+
+    private static void SendOnlineSummaryToChat(GameSession session)
+    {
+        if (!session.IsConnected) return;
+        var online = GetOnlineChannelEntries();
+        string names = string.Join(", ", online.Take(12).Select(p => p.Name));
+        if (online.Length > 12) names += $" и ещё {online.Length - 12}";
+        string text = online.Length == 1
+            ? $"Игроков онлайн: 1 ({names}). Напишите /online в чат, чтобы обновить список."
+            : $"Игроков онлайн: {online.Length} ({names}).";
+        try
+        {
+            session.Send(new PK_HC_HallChatRes
+            {
+                ChatType = 2, // TO_HALL
+                PlayerGUID = 0,
+                PlayerName = "Онлайн",
+                Message = text,
+            });
+        }
+        catch { }
+    }
+
     private void HandleChat(GameSession session, PK_CH_HallChat msg)
     {
-        Console.WriteLine($"[HS] Chat [{session.PlayerName}]: {msg.Message}");
-        session.Send(new PK_HC_HallChatRes { PlayerName = session.PlayerName, Message = msg.Message });
+        Console.WriteLine($"[HS] PrivateChat [{session.PlayerName}] -> {msg.ContentPlayerGUID}: {msg.Message}");
+        var pkt = new PK_HC_HallChatRes
+        {
+            ChatType = 0, // PRIVATE
+            PlayerGUID = session.PlayerGUID,
+            PlayerName = session.PlayerName,
+            Message = msg.Message,
+        };
+        session.Send(pkt);
+        if (msg.ContentPlayerGUID != 0 && msg.ContentPlayerGUID != session.PlayerGUID)
+        {
+            var target = GetHallSession(msg.ContentPlayerGUID);
+            if (target != null)
+            {
+                try { target.Send(pkt); } catch { }
+            }
+        }
     }
 
     private void HandleHallChatAll(GameSession session, PK_CH_HALLCHAT_ALL msg)
     {
-        Console.WriteLine($"[HS] HallChatAll [{session.PlayerName}]: {msg.Message}");
-        session.Send(new PK_HC_HallChatRes { PlayerName = session.PlayerName, Message = msg.Message });
+        string text = (msg.Message ?? string.Empty).Trim();
+        Console.WriteLine($"[HS] HallChatAll type={msg.ChatType} [{session.PlayerName}]: {text}");
+
+        if (string.Equals(text, "/online", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(text, "!online", StringComparison.OrdinalIgnoreCase))
+        {
+            SendOnlineSummaryToChat(session);
+            return;
+        }
+
+        var pkt = new PK_HC_HallChatRes
+        {
+            ChatType = msg.ChatType,
+            PlayerGUID = session.PlayerGUID,
+            PlayerName = session.PlayerName,
+            Message = msg.Message ?? string.Empty,
+        };
+
+        if (msg.ChatType == 4) // TO_TEAM (Squad chat)
+        {
+            List<GameSession> recipients = new();
+            lock (_squadLock)
+            {
+                if (_playerSquadMap.TryGetValue(session.PlayerGUID, out var tid)
+                    && _squadsByGuid.TryGetValue(tid, out var sq))
+                {
+                    recipients = sq.Members.Select(m => m.Session).Where(s => s.IsConnected).ToList();
+                }
+            }
+            if (recipients.Count == 0) recipients.Add(session);
+            foreach (var r in recipients) { try { r.Send(pkt); } catch { } }
+            return;
+        }
+
+        if (msg.ChatType == 1) // TO_CORPS (Clan chat)
+        {
+            var corpsGuid = _corpsRepo.GetPlayerCorpsGUID(session.PlayerGUID);
+            if (corpsGuid.HasValue)
+            {
+                foreach (var m in _corpsRepo.GetMembers(corpsGuid.Value))
+                {
+                    var s = GetHallSession(m.PlayerGUID);
+                    if (s != null) { try { s.Send(pkt); } catch { } }
+                }
+                return;
+            }
+        }
+
+        // Default: TO_HALL (broadcast to all connected players)
+        foreach (var s in _hallByGuid.Values)
+        {
+            if (!s.IsConnected) continue;
+            try { s.Send(pkt); } catch { }
+        }
+    }
+
+    private static PK_HC_Team_Info BuildTeamInfoPacket(SquadInfo sq)
+    {
+        var members = new TeamMemberEntry[sq.Members.Count];
+        for (int i = 0; i < sq.Members.Count; i++)
+        {
+            var m = sq.Members[i];
+            m.Order = (byte)(i + 1);
+            members[i] = new TeamMemberEntry
+            {
+                Guid = m.PlayerGuid,
+                Order = m.Order,
+                UserName = m.PlayerName,
+                TankId = m.VehicleId,
+                IsReady = (byte)((m.IsReady || m.PlayerGuid == sq.LeaderGuid) ? 1 : 0),
+                IsEliteState = 1,
+                Extra = 0,
+            };
+        }
+        return new PK_HC_Team_Info
+        {
+            TeamGuid = sq.TeamGuid,
+            LeaderGuid = sq.LeaderGuid,
+            IsEnterFree = sq.IsEnterFree,
+            BattleMode = sq.ServerBattleMode,
+            MaxMemberCount = sq.MaxSize,
+            Members = members,
+        };
+    }
+
+    private void BroadcastSquadInfo(SquadInfo sq)
+    {
+        PK_HC_Team_Info pkt;
+        List<(long Guid, GameSession Session)> targets;
+        ChannelPlayerEntry[] teamEntries;
+        lock (_squadLock)
+        {
+            pkt = BuildTeamInfoPacket(sq);
+            targets = sq.Members.Select(m => (m.PlayerGuid, m.Session)).ToList();
+            teamEntries = sq.Members.Select(m => new ChannelPlayerEntry { Guid = m.PlayerGuid, Name = m.PlayerName }).ToArray();
+        }
+        foreach (var (guid, s) in targets)
+        {
+            if (!s.IsConnected) continue;
+            try
+            {
+                s.Send(pkt);
+                s.Send(new PK_HC_Channel_Res { PlayerGUID = guid, HallChatType = 4 /* TO_TEAM */, Players = teamEntries });
+            }
+            catch { }
+        }
+        foreach (var (guid, _) in targets)
+            BroadcastFriendStateChanged(guid);
+    }
+
+    private void RemovePlayerFromSquad(long playerGuid, bool sendLeavePacket, byte leaveWord = 0)
+    {
+        SquadInfo? remaining = null;
+        GameSession? removedSession = GetHallSession(playerGuid);
+        lock (_squadLock)
+        {
+            if (!_playerSquadMap.TryGetValue(playerGuid, out var tid)) return;
+            _playerSquadMap.Remove(playerGuid);
+            if (_squadsByGuid.TryGetValue(tid, out var sq))
+            {
+                sq.Members.RemoveAll(m => m.PlayerGuid == playerGuid);
+                sq.InvitedGuids.Remove(playerGuid);
+                if (sq.Members.Count == 0)
+                {
+                    _squadsByGuid.Remove(tid);
+                }
+                else
+                {
+                    if (sq.LeaderGuid == playerGuid)
+                    {
+                        sq.LeaderGuid = sq.Members[0].PlayerGuid;
+                        sq.Members[0].IsReady = true;
+                    }
+                    remaining = sq;
+                }
+            }
+        }
+        if (sendLeavePacket && removedSession != null && removedSession.IsConnected)
+        {
+            try { removedSession.Send(new PK_HC_Leave_Team { Word = leaveWord }); } catch { }
+        }
+        if (remaining != null)
+            BroadcastSquadInfo(remaining);
+        BroadcastFriendStateChanged(playerGuid);
     }
 
     private void HandleCreateTeam(GameSession session, PK_CH_Create_Team msg)
     {
-        Console.WriteLine($"[HS] CreateTeam");
-        session.Send(new PK_HC_Team_Info { TeamGuid = _random.Next(100000, 999999), BattleMode = msg.BattleMode, MemberCount = 1, MaxMemberCount = 3 });
+        RemovePlayerFromSquad(session.PlayerGUID, sendLeavePacket: false);
+
+        long tankGuid = GetSelectedTankGuid(session.PlayerGUID, msg.TankGuid);
+        short vehicleId = ResolveVehicleId(session.PlayerGUID, tankGuid);
+        byte serverMode = msg.BattleMode;
+        long teamGuid = Interlocked.Increment(ref _nextSquadSeq);
+
+        var sq = new SquadInfo
+        {
+            TeamGuid = teamGuid,
+            LeaderGuid = session.PlayerGUID,
+            ServerBattleMode = serverMode,
+            IsEnterFree = 1,
+            MaxSize = MaxSquadSizeForServerMode(serverMode),
+        };
+        sq.Members.Add(new SquadMember
+        {
+            PlayerGuid = session.PlayerGUID,
+            PlayerName = session.PlayerName,
+            Session = session,
+            TankGuid = tankGuid,
+            VehicleId = vehicleId,
+            Order = 1,
+            IsReady = true,
+        });
+
+        lock (_squadLock)
+        {
+            _squadsByGuid[teamGuid] = sq;
+            _playerSquadMap[session.PlayerGUID] = teamGuid;
+        }
+        Console.WriteLine($"[HS] CreateTeam: team={teamGuid} leader={session.PlayerName} serverMode={serverMode} max={sq.MaxSize}");
+        BroadcastSquadInfo(sq);
     }
 
     private void HandleTeamReady(GameSession session, PK_CH_Team_Ready msg)
     {
-        Console.WriteLine($"[HS] TeamReady: {msg.ReadyState}");
-        session.Send(new PK_HC_Confirm_Ready { PlayerGuid = session.PlayerGUID, ReadyState = msg.ReadyState });
+        long tankGuid = GetSelectedTankGuid(session.PlayerGUID, msg.TankGuid);
+        short vehicleId = ResolveVehicleId(session.PlayerGUID, tankGuid);
+        bool ready = msg.ReadyState != 0;
+
+        List<GameSession> recipients = new();
+        lock (_squadLock)
+        {
+            if (_playerSquadMap.TryGetValue(session.PlayerGUID, out var tid)
+                && _squadsByGuid.TryGetValue(tid, out var sq))
+            {
+                var mem = sq.Members.FirstOrDefault(m => m.PlayerGuid == session.PlayerGUID);
+                if (mem != null)
+                {
+                    mem.TankGuid = tankGuid;
+                    mem.VehicleId = vehicleId;
+                    mem.IsReady = ready;
+                }
+                recipients = sq.Members.Select(m => m.Session).Where(s => s.IsConnected).ToList();
+            }
+        }
+        if (recipients.Count == 0) recipients.Add(session);
+
+        BaseRequest notify = ready
+            ? new PK_HC_Confirm_Ready { PlayerGuid = session.PlayerGUID, TankId = vehicleId }
+            : new PK_HC_Cancel_Ready { PlayerGuid = session.PlayerGUID };
+        foreach (var r in recipients) { try { r.Send(notify); } catch { } }
+        Console.WriteLine($"[HS] TeamReady: {session.PlayerName} ready={ready} tank={vehicleId}");
+    }
+
+    private void LaunchSquadBattle(SquadInfo sq, byte serverMode, byte battleLevel)
+    {
+        List<SquadMember> members;
+        long teamGuid;
+        lock (_squadLock)
+        {
+            teamGuid = sq.TeamGuid;
+            members = sq.Members.Where(m => m.Session.IsConnected).ToList();
+            foreach (var m in members)
+            {
+                if (m.PlayerGuid != sq.LeaderGuid) m.IsReady = false;
+            }
+        }
+        if (members.Count == 0) return;
+
+        // Normalize Defense wire mode: PK_CH_Create_Team sends 5 for PVE, RoomServer expects 4 or 5
+        byte roomMode = serverMode == 5 ? (byte)4 : serverMode;
+        byte normMode = NormalizeMatchMode(roomMode);
+        int maxHumansInMode = normMode == 4 ? DefenseTeamCap : PvpRoomCap;
+
+        var prepared = new List<(SquadMember Member, long TankGuid, int Tier)>();
+        foreach (var m in members)
+        {
+            EnsurePlayerHangarConsistency(m.PlayerGuid);
+            long tg = GetSelectedTankGuid(m.PlayerGuid, m.TankGuid);
+            MarkBattleTank(m.PlayerGuid, tg);
+            prepared.Add((m, tg, GetQueueTier(tg)));
+            try { m.Session.Send(new PK_HC_Start_End_Match { State = 1 }); } catch { }
+            if (roomMode == 2)
+                try { m.Session.Send(new PK_HC_BeginQueueWait { Flag = 1, TotalNum = members.Count, BattleMode = 2 }); } catch { }
+        }
+
+        // Launch the entire squad together into ONE shared RoomGUID (or join an existing open lobby together).
+        long roomGuid;
+        lock (_matchLock)
+        {
+            foreach (var p in prepared) _queueCancelled.Remove(p.Member.PlayerGuid);
+
+            // If there's an open waiting lobby with room for the entire squad, add the whole squad to it!
+            if (_waitingLobbies.TryGetValue(normMode, out var openLobby)
+                && openLobby.Entries.Count + prepared.Count <= maxHumansInMode)
+            {
+                roomGuid = openLobby.RoomGuid;
+                BattleModeRegistry.RecordSquad(roomGuid, teamGuid, prepared.Select(p => p.Member.PlayerGuid));
+                foreach (var p in prepared)
+                {
+                    openLobby.Entries.RemoveAll(e => e.PlayerGuid == p.Member.PlayerGuid);
+                    openLobby.Entries.Add(new MatchEntry(p.Member.Session, p.Member.PlayerGuid, p.TankGuid, roomGuid, roomMode, normMode, battleLevel, p.Tier, openLobby.WaitCts));
+                }
+                var allTiers = openLobby.Entries.Select(e => e.Tier).ToList();
+                int activeCount = Math.Max(1, _activeRoomsByMode.Count + 1);
+                foreach (var p in prepared)
+                    SendQueueSnapshot(p.Member.Session, roomMode, p.Tier, allTiers, activeCount, maxHumansInMode);
+                BroadcastLobbyUpdatesLocked(openLobby, activeCount);
+
+                if (openLobby.Entries.Count >= maxHumansInMode)
+                {
+                    _waitingLobbies.Remove(normMode);
+                    try { openLobby.WaitCts.Cancel(); } catch { }
+                    Task.Run(async () => { await Task.Delay(CoopFoundDelayMs); LaunchMatchLobby(openLobby); });
+                }
+                Console.WriteLine($"[HS] Squad {teamGuid} ({prepared.Count} players) joined waiting lobby room={roomGuid} mode={normMode}");
+                return;
+            }
+
+            // Otherwise create a shared lobby for the squad (wait 20s if solo, or 3s quick-start if 2+ squadmates!)
+            roomGuid = Math.Abs(BitConverter.ToInt64(Guid.NewGuid().ToByteArray(), 0));
+            BattleModeRegistry.RecordSquad(roomGuid, teamGuid, prepared.Select(p => p.Member.PlayerGuid));
+            var cts = new CancellationTokenSource();
+            var lobby = new MatchLobby { RoomGuid = roomGuid, NormMode = normMode, WaitCts = cts };
+            foreach (var p in prepared)
+                lobby.Entries.Add(new MatchEntry(p.Member.Session, p.Member.PlayerGuid, p.TankGuid, roomGuid, roomMode, normMode, battleLevel, p.Tier, cts));
+            _waitingLobbies[normMode] = lobby;
+
+            var tiers = prepared.Select(p => p.Tier).ToList();
+            int roomsShown = Math.Max(1, _activeRoomsByMode.Count + 1);
+            foreach (var p in prepared)
+                SendQueueSnapshot(p.Member.Session, roomMode, p.Tier, tiers, roomsShown, maxHumansInMode);
+
+            int waitSec = prepared.Count >= 2 ? 5 : MatchSearchWaitSec;
+            Console.WriteLine($"[HS] Squad {teamGuid} ({prepared.Count} players) opened {waitSec}s lobby room={roomGuid} mode={normMode}");
+
+            Task.Run(async () =>
+            {
+                try { await Task.Delay(waitSec * 1000, cts.Token); }
+                catch (OperationCanceledException) { return; }
+
+                bool shouldLaunch = false;
+                lock (_matchLock)
+                {
+                    if (_waitingLobbies.TryGetValue(normMode, out var cur) && ReferenceEquals(cur, lobby))
+                    {
+                        _waitingLobbies.Remove(normMode);
+                        shouldLaunch = true;
+                    }
+                }
+                if (shouldLaunch) LaunchMatchLobby(lobby);
+            });
+        }
     }
 
     private void HandleQuickMatch(GameSession session, PK_CH_Quick_Match msg)
     {
-        Console.WriteLine($"[HS] QuickMatch: Mode={msg.BattleMode}, Level={msg.BattleLevel} — redirecting to RoomServer");
+        SquadInfo? sq = null;
+        lock (_squadLock)
+        {
+            if (_playerSquadMap.TryGetValue(session.PlayerGUID, out var tid))
+                _squadsByGuid.TryGetValue(tid, out sq);
+        }
+        if (sq != null)
+        {
+            LaunchSquadBattle(sq, msg.BattleMode, msg.BattleLevel);
+            return;
+        }
+
+        Console.WriteLine($"[HS] QuickMatch: Mode={msg.BattleMode}, Level={msg.BattleLevel}");
         long tankGuid = GetSelectedTankGuid(session.PlayerGUID);
         MarkBattleTank(session.PlayerGUID, tankGuid);
-        long roomGuid = Math.Abs(BitConverter.ToInt64(Guid.NewGuid().ToByteArray(), 0));
-        BattleModeRegistry.Record(roomGuid, session.PlayerGUID, msg.BattleMode, msg.BattleLevel);
-        session.Send(new PK_HC_JoinRoomRes
-        {
-            Flag = 1, Certification = session.Certification,
-            Ip = ResolveRoomServerIp(session), Port = 9601, RoomGUID = roomGuid,
-            TankGUID = tankGuid, IsObserver = 0
-        });
+        byte roomMode = msg.BattleMode == 5 ? (byte)4 : msg.BattleMode;
+        TryMatchmake(session, tankGuid, roomMode, msg.BattleLevel);
     }
 
     private void HandleStartMatch(GameSession session)
     {
-        Console.WriteLine($"[HS] StartMatch — redirecting to RoomServer");
+        SquadInfo? sq = null;
+        lock (_squadLock)
+        {
+            if (_playerSquadMap.TryGetValue(session.PlayerGUID, out var tid))
+                _squadsByGuid.TryGetValue(tid, out sq);
+        }
+        if (sq != null)
+        {
+            Console.WriteLine($"[HS] StartMatch for Squad {sq.TeamGuid} ({sq.Members.Count} players) mode={sq.ServerBattleMode}");
+            LaunchSquadBattle(sq, sq.ServerBattleMode, 1);
+            return;
+        }
+
+        Console.WriteLine($"[HS] StartMatch (solo) — redirecting via matchmaking");
         long tankGuid = GetSelectedTankGuid(session.PlayerGUID);
         MarkBattleTank(session.PlayerGUID, tankGuid);
-        long roomGuid = Math.Abs(BitConverter.ToInt64(Guid.NewGuid().ToByteArray(), 0));
-        session.Send(new PK_HC_JoinRoomRes
-        {
-            Flag = 1, Certification = session.Certification,
-            Ip = ResolveRoomServerIp(session), Port = 9601, RoomGUID = roomGuid,
-            TankGUID = tankGuid, IsObserver = 0
-        });
+        TryMatchmake(session, tankGuid, 0, 1);
     }
 
     private void HandleJoinRoom(GameSession session, PK_CH_RequestJoinRoom msg)
@@ -1547,6 +1998,24 @@ public class HallServer : GameServer
             }
         }
         MarkBattleTank(session.PlayerGUID, tankGuid);
+
+        // If the squad leader clicks regular Battle, bring the whole squad together!
+        SquadInfo? activeSquad = null;
+        lock (_squadLock)
+        {
+            if (_playerSquadMap.TryGetValue(session.PlayerGUID, out var tid)
+                && _squadsByGuid.TryGetValue(tid, out var sq)
+                && sq.LeaderGuid == session.PlayerGUID
+                && sq.Members.Count > 1)
+            {
+                activeSquad = sq;
+            }
+        }
+        if (activeSquad != null)
+        {
+            LaunchSquadBattle(activeSquad, msg.BattleMode, msg.BattleLevel);
+            return;
+        }
 
         if (IsMultiplayerMode(msg.BattleMode))
         {
@@ -4243,6 +4712,28 @@ public class HallServer : GameServer
 
         MarkBattleTank(data.PlayerGUID, msg.TankGuid);
         SendSingleTankInfo(session, tank);
+
+        // If player is in a squad, update their tank and notify all squadmates
+        List<GameSession>? squadRecipients = null;
+        lock (_squadLock)
+        {
+            if (_playerSquadMap.TryGetValue(data.PlayerGUID, out var tid)
+                && _squadsByGuid.TryGetValue(tid, out var sq))
+            {
+                var mem = sq.Members.FirstOrDefault(m => m.PlayerGuid == data.PlayerGUID);
+                if (mem != null)
+                {
+                    mem.TankGuid = msg.TankGuid;
+                    mem.VehicleId = (short)tank.VehicleId;
+                }
+                squadRecipients = sq.Members.Select(m => m.Session).Where(s => s.IsConnected).ToList();
+            }
+        }
+        if (squadRecipients != null)
+        {
+            var tankPkt = new PK_HC_Tank_Info { PlayerGuid = data.PlayerGUID, TankId = (short)tank.VehicleId };
+            foreach (var s in squadRecipients) { try { s.Send(tankPkt); } catch { } }
+        }
     }
     private void HandleSetGarageBackground(GameSession session, PK_CH_Set_Garage_Background msg)
     {
@@ -4256,18 +4747,196 @@ public class HallServer : GameServer
 
     private void HandleInviteTeam(GameSession session, PK_CH_Invite_Team msg)
     {
-        Console.WriteLine($"[HS] Invite team by {session.PlayerName}");
-    }
-    private void HandleJoinTeam(GameSession session, PK_CH_Join_Team msg) => session.Send(new PK_HC_Team_Info { TeamGuid = msg.TeamGuid, BattleMode = 1, MemberCount = 1, MaxMemberCount = 2 });
-    private void HandleLeaveTeam(GameSession session) => session.Send(new PK_HC_Leave_Team { PlayerGuid = session.PlayerGUID });
-    private void HandleKickTeam(GameSession session, PK_CH_Kick_Team msg) => session.Send(new PK_HC_Leave_Team { PlayerGuid = msg.PlayerGuid });
+        SquadInfo? sq;
+        lock (_squadLock)
+        {
+            _playerSquadMap.TryGetValue(session.PlayerGUID, out var tid);
+            _squadsByGuid.TryGetValue(tid, out sq);
+        }
+        if (sq == null)
+        {
+            HandleCreateTeam(session, new PK_CH_Create_Team
+            {
+                TankGuid = GetSelectedTankGuid(session.PlayerGUID),
+                BattleMode = 0,
+            });
+            lock (_squadLock)
+            {
+                _playerSquadMap.TryGetValue(session.PlayerGUID, out var tid);
+                _squadsByGuid.TryGetValue(tid, out sq);
+            }
+        }
+        if (sq == null) return;
 
-    private void HandleTeamChangeMode(GameSession session) => session.Send(new PK_HC_Team_Update_Mode { });
-    private void HandleSetFreeTeam(GameSession session, PK_CH_Set_Free_Team msg) => session.Send(new PK_HC_Free_Team { FreeTeamState = msg.FreeTeamState });
-    private void HandleBeInviteTeamRet(GameSession session)
+        GameSession? target = msg.PlayerGuid != 0 ? GetHallSession(msg.PlayerGuid) : null;
+        if (target == null && !string.IsNullOrWhiteSpace(msg.PlayerName))
+        {
+            target = _hallByGuid.Values.FirstOrDefault(s =>
+                s.IsConnected && string.Equals(s.PlayerName, msg.PlayerName.Trim(), StringComparison.OrdinalIgnoreCase));
+        }
+        if (target == null || target.PlayerGUID == session.PlayerGUID)
+        {
+            Console.WriteLine($"[HS] InviteTeam: target not online (guid={msg.PlayerGuid}, name={msg.PlayerName})");
+            return;
+        }
+
+        lock (_squadLock)
+        {
+            if (sq.Members.Count >= sq.MaxSize || sq.Members.Any(m => m.PlayerGuid == target.PlayerGUID))
+                return;
+            sq.InvitedGuids.Add(target.PlayerGUID);
+        }
+
+        target.Send(new PK_HC_Be_Invite_Team
+        {
+            TeamGuid = sq.TeamGuid,
+            PlayerGuid = session.PlayerGUID,
+            InviterName = session.PlayerName,
+            InviteDate = (uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+            BattleMode = ConvertServerModeToClient(sq.ServerBattleMode),
+        });
+        Console.WriteLine($"[HS] InviteTeam: {session.PlayerName} invited {target.PlayerName} to squad {sq.TeamGuid}");
+    }
+
+    private void TryAddPlayerToSquad(GameSession session, long teamGuid, long requestedTankGuid, bool requireFreeOrInvited)
     {
-        Console.WriteLine($"[HS] BeInviteTeamRet by {session.PlayerName}");
-        session.Send(new PK_HC_Team_Info { TeamGuid = 0, BattleMode = 0, MemberCount = 0, MaxMemberCount = 0 });
+        SquadInfo? sq;
+        lock (_squadLock)
+        {
+            if (!_squadsByGuid.TryGetValue(teamGuid, out sq)) return;
+            if (sq.Members.Any(m => m.PlayerGuid == session.PlayerGUID))
+            {
+                sq.Members.First(m => m.PlayerGuid == session.PlayerGUID).Session = session;
+            }
+            else
+            {
+                if (sq.Members.Count >= sq.MaxSize) return;
+                if (requireFreeOrInvited && sq.IsEnterFree == 0 && !sq.InvitedGuids.Contains(session.PlayerGUID))
+                    return;
+            }
+        }
+
+        if (GetPlayerSquadGuid(session.PlayerGUID) != teamGuid)
+            RemovePlayerFromSquad(session.PlayerGUID, sendLeavePacket: false);
+
+        long tankGuid = GetSelectedTankGuid(session.PlayerGUID, requestedTankGuid);
+        short vehicleId = ResolveVehicleId(session.PlayerGUID, tankGuid);
+
+        lock (_squadLock)
+        {
+            if (!_squadsByGuid.TryGetValue(teamGuid, out sq)) return;
+            if (sq.Members.Count >= sq.MaxSize && !sq.Members.Any(m => m.PlayerGuid == session.PlayerGUID))
+                return;
+            if (!sq.Members.Any(m => m.PlayerGuid == session.PlayerGUID))
+            {
+                sq.Members.Add(new SquadMember
+                {
+                    PlayerGuid = session.PlayerGUID,
+                    PlayerName = session.PlayerName,
+                    Session = session,
+                    TankGuid = tankGuid,
+                    VehicleId = vehicleId,
+                    Order = (byte)(sq.Members.Count + 1),
+                    IsReady = false,
+                });
+            }
+            sq.InvitedGuids.Remove(session.PlayerGUID);
+            _playerSquadMap[session.PlayerGUID] = teamGuid;
+        }
+        Console.WriteLine($"[HS] Squad join: {session.PlayerName} joined squad {teamGuid}");
+        BroadcastSquadInfo(sq);
+    }
+
+    private void HandleJoinTeam(GameSession session, PK_CH_Join_Team msg)
+    {
+        TryAddPlayerToSquad(session, msg.TeamGuid, msg.TankGuid, requireFreeOrInvited: true);
+    }
+
+    private void HandleLeaveTeam(GameSession session)
+    {
+        Console.WriteLine($"[HS] LeaveTeam: {session.PlayerName}");
+        RemovePlayerFromSquad(session.PlayerGUID, sendLeavePacket: true, leaveWord: 0);
+    }
+
+    private void HandleKickTeam(GameSession session, PK_CH_Kick_Team msg)
+    {
+        bool canKick = false;
+        lock (_squadLock)
+        {
+            if (_playerSquadMap.TryGetValue(session.PlayerGUID, out var tid)
+                && _squadsByGuid.TryGetValue(tid, out var sq)
+                && sq.LeaderGuid == session.PlayerGUID
+                && msg.PlayerGuid != session.PlayerGUID)
+            {
+                canKick = true;
+            }
+        }
+        if (canKick)
+        {
+            Console.WriteLine($"[HS] KickTeam: {session.PlayerName} kicked {msg.PlayerGuid}");
+            RemovePlayerFromSquad(msg.PlayerGuid, sendLeavePacket: true, leaveWord: 1);
+        }
+    }
+
+    private void HandleTeamChangeMode(GameSession session, PK_CH_Team_Change_Mode msg)
+    {
+        SquadInfo? sq = null;
+        List<GameSession> recipients = new();
+        lock (_squadLock)
+        {
+            if (_playerSquadMap.TryGetValue(session.PlayerGUID, out var tid)
+                && _squadsByGuid.TryGetValue(tid, out sq)
+                && sq.LeaderGuid == session.PlayerGUID)
+            {
+                sq.ServerBattleMode = ConvertClientModeToServer(msg.BattleMode);
+                sq.MaxSize = MaxSquadSizeForServerMode(sq.ServerBattleMode);
+                recipients = sq.Members.Select(m => m.Session).Where(s => s.IsConnected).ToList();
+            }
+            else
+            {
+                sq = null;
+            }
+        }
+        if (sq == null) return;
+        var modePkt = new PK_HC_Team_Update_Mode { BattleMode = msg.BattleMode };
+        foreach (var r in recipients) { try { r.Send(modePkt); } catch { } }
+        BroadcastSquadInfo(sq);
+        Console.WriteLine($"[HS] TeamChangeMode: squad={sq.TeamGuid} clientMode={msg.BattleMode} serverMode={sq.ServerBattleMode}");
+    }
+
+    private void HandleSetFreeTeam(GameSession session, PK_CH_Set_Free_Team msg)
+    {
+        List<GameSession> recipients = new();
+        lock (_squadLock)
+        {
+            if (_playerSquadMap.TryGetValue(session.PlayerGUID, out var tid)
+                && _squadsByGuid.TryGetValue(tid, out var sq)
+                && sq.LeaderGuid == session.PlayerGUID)
+            {
+                sq.IsEnterFree = msg.FreeTeamState;
+                recipients = sq.Members.Select(m => m.Session).Where(s => s.IsConnected).ToList();
+            }
+        }
+        if (recipients.Count == 0) recipients.Add(session);
+        var pkt = new PK_HC_Free_Team { FreeTeamState = msg.FreeTeamState };
+        foreach (var r in recipients) { try { r.Send(pkt); } catch { } }
+    }
+
+    private void HandleBeInviteTeamRet(GameSession session, PK_CH_Be_Invite_Team_Ret msg)
+    {
+        Console.WriteLine($"[HS] BeInviteTeamRet: {session.PlayerName} team={msg.TeamGuid} accept={msg.AcceptState}");
+        if (msg.AcceptState == 1)
+        {
+            TryAddPlayerToSquad(session, msg.TeamGuid, msg.TankGuid, requireFreeOrInvited: false);
+        }
+        else
+        {
+            lock (_squadLock)
+            {
+                if (_squadsByGuid.TryGetValue(msg.TeamGuid, out var sq))
+                    sq.InvitedGuids.Remove(session.PlayerGUID);
+            }
+        }
     }
     private void HandleRespReconnect(GameSession session) => session.Send(new PK_HC_RespReconnectResult { Result = 1 });
     // v12: собирает окно «Статистика боя» из пакета RoomServer'а. Оборона (mode 4)
@@ -5313,18 +5982,98 @@ public class HallServer : GameServer
         Console.WriteLine("[HS] Ask bonus box data");
     }
 
-    private void HandleChannel(GameSession session, PK_CH_CHANNEL msg) => session.Send(new PK_HC_Channel_Res { ChannelId = msg.ChannelId });
+    private void HandleChannel(GameSession session, PK_CH_CHANNEL msg)
+    {
+        ChannelPlayerEntry[] entries;
+        if (msg.HallChatType == 4) // TO_TEAM (Squad)
+        {
+            lock (_squadLock)
+            {
+                if (_playerSquadMap.TryGetValue(session.PlayerGUID, out var tid)
+                    && _squadsByGuid.TryGetValue(tid, out var sq))
+                    entries = sq.Members.Select(m => new ChannelPlayerEntry { Guid = m.PlayerGuid, Name = m.PlayerName }).ToArray();
+                else
+                    entries = Array.Empty<ChannelPlayerEntry>();
+            }
+        }
+        else if (msg.HallChatType == 1) // TO_CORPS (Clan)
+        {
+            var corpsGuid = _corpsRepo.GetPlayerCorpsGUID(session.PlayerGUID);
+            if (corpsGuid.HasValue)
+            {
+                entries = _corpsRepo.GetMembers(corpsGuid.Value)
+                    .Where(m => IsPlayerOnline(m.PlayerGUID))
+                    .Select(m => new ChannelPlayerEntry { Guid = m.PlayerGUID, Name = m.PlayerName })
+                    .ToArray();
+            }
+            else entries = Array.Empty<ChannelPlayerEntry>();
+        }
+        else // TO_HALL (all real online players)
+        {
+            entries = GetOnlineChannelEntries();
+        }
+
+        session.Send(new PK_HC_Channel_Res
+        {
+            PlayerGUID = session.PlayerGUID,
+            HallChatType = msg.HallChatType,
+            Players = entries,
+        });
+    }
+
+    private void PushCorpsDataToOnlineMembers(long corpsGuid)
+    {
+        var corps = _corpsRepo.GetByGUID(corpsGuid);
+        var members = _corpsRepo.GetMembers(corpsGuid);
+        foreach (var m in members)
+        {
+            var s = GetHallSession(m.PlayerGUID);
+            if (s == null) continue;
+            try
+            {
+                var app = _corpsRepo.GetPlayerApplication(m.PlayerGUID);
+                s.Send(BuildCorpsDataPacket(corps, m.Job, members.Count, app, corpsGuid, fealtyPoint: m.LoyalPoint));
+            }
+            catch { }
+        }
+    }
+
+    private void SendCorpsApplicationsToSession(GameSession session, long corpsGuid, ushort bias = 0)
+    {
+        var apps = _corpsRepo.GetApplications(corpsGuid);
+        const int pageSize = 10;
+        var page = apps.Skip(bias).Take(pageSize).ToList();
+        var pkt = new PK_WHC_CORPS_APPLICATION
+        {
+            Type = 0,
+            ApplicationTotalCount = apps.Count,
+            CurrentPageCount = (ushort)(bias / pageSize),
+            CurrentPageNumber = page.Count,
+            Applications = page.Select(a => new CorpsApplicationInfo
+            {
+                GUID = a.PlayerGUID,
+                JoinTime = a.ApplyTime.ToString("yyyy-MM-dd HH:mm"),
+                UserName = a.PlayerName,
+            }).ToArray(),
+        };
+        session.Send(pkt);
+    }
+
     private void HandleCorpsCreate(GameSession session, PK_CHW_CORPS_CREATE msg)
     {
         var data = GetPlayerData(session);
         if (data == null) return;
-        if (_corpsRepo.GetByName(msg.CorpsName) != null) return;
+        if (string.IsNullOrWhiteSpace(msg.CorpsName)) return;
+        if (_corpsRepo.GetByName(msg.CorpsName.Trim()) != null) return;
         if (_corpsRepo.GetPlayerCorpsGUID(data.PlayerGUID).HasValue) return; // already in corps
         long corpsGuid = _random.Next(100000, 999999);
-        var corps = _corpsRepo.CreateCorps(corpsGuid, msg.CorpsName, msg.CorpsTag ?? "", data.PlayerGUID, data.PlayerName);
+        var corps = _corpsRepo.CreateCorps(corpsGuid, msg.CorpsName.Trim(), (msg.CorpsTag ?? "").Trim(), data.PlayerGUID, data.PlayerName);
         // Give creator 1,000,000 loyalty so they can immediately research any tank
         _corpsRepo.UpdateMemberLoyalPoint(corpsGuid, data.PlayerGUID, 1_000_000);
-        var pkt = BuildCorpsDataPacket(corps, 2, 1, null, corpsGuid);
+        _corpsRepo.UpdateMemberBattleCap(corpsGuid, data.PlayerGUID, data.BattleCap);
+        _corpsRepo.RecalculateCorpsBattleCap(corpsGuid);
+        corps = _corpsRepo.GetByGUID(corpsGuid);
+        var pkt = BuildCorpsDataPacket(corps, 2, 1, null, corpsGuid, fealtyPoint: 1_000_000);
         session.Send(pkt);
         Console.WriteLine($"[HS] Corps created: {msg.CorpsName} by {data.PlayerName}");
     }
@@ -5368,7 +6117,12 @@ public class HallServer : GameServer
         var data = GetPlayerData(session);
         if (data == null) return;
         var corpsGuid = _corpsRepo.GetPlayerCorpsGUID(data.PlayerGUID);
-        if (corpsGuid.HasValue) _corpsRepo.RemoveMember(corpsGuid.Value, data.PlayerGUID);
+        if (!corpsGuid.HasValue) return;
+        _corpsRepo.RemoveMember(corpsGuid.Value, data.PlayerGUID);
+        _corpsRepo.RecalculateCorpsBattleCap(corpsGuid.Value);
+        session.Send(new PK_WHC_CorpsData { TroopsID = 0 });
+        PushCorpsDataToOnlineMembers(corpsGuid.Value);
+        Console.WriteLine($"[HS] Corps quit: {data.PlayerName} left corps {corpsGuid.Value}");
     }
 
     private void HandleCorpsDismiss(GameSession session, PK_CHW_CORPS_DISMISS msg)
@@ -5376,8 +6130,29 @@ public class HallServer : GameServer
         var data = GetPlayerData(session);
         if (data == null) return;
         var corpsGuid = _corpsRepo.GetPlayerCorpsGUID(data.PlayerGUID);
-        if (corpsGuid.HasValue) _corpsRepo.DisbandCorps(corpsGuid.Value);
-        session.Send(new PK_WHC_CorpsData { TroopsID = 0 });
+        if (!corpsGuid.HasValue) return;
+        var member = _corpsRepo.GetMember(corpsGuid.Value, data.PlayerGUID);
+        if (member == null || member.Job < 2) return;
+        var members = _corpsRepo.GetMembers(corpsGuid.Value);
+        _corpsRepo.DisbandCorps(corpsGuid.Value);
+        foreach (var m in members)
+        {
+            var s = GetHallSession(m.PlayerGUID);
+            if (s != null) { try { s.Send(new PK_WHC_CorpsData { TroopsID = 0 }); } catch { } }
+        }
+        Console.WriteLine($"[HS] Corps disbanded: {corpsGuid.Value} by {data.PlayerName}");
+    }
+
+    private void HandleCorpsModAnnouncement(GameSession session, PK_CHW_CORPS_MOD_ANNOUCEMENT msg)
+    {
+        var data = GetPlayerData(session);
+        if (data == null) return;
+        var corpsGuid = _corpsRepo.GetPlayerCorpsGUID(data.PlayerGUID);
+        if (!corpsGuid.HasValue) return;
+        var member = _corpsRepo.GetMember(corpsGuid.Value, data.PlayerGUID);
+        if (member == null || member.Job < 1) return;
+        _corpsRepo.UpdateCorpsNotice(corpsGuid.Value, msg.NoticeContent ?? string.Empty);
+        PushCorpsDataToOnlineMembers(corpsGuid.Value);
     }
 
     private void HandleCorpsModIntroduce(GameSession session, PK_CHW_CORPS_MOD_INTRODUCE msg)
@@ -5389,6 +6164,7 @@ public class HallServer : GameServer
         var member = _corpsRepo.GetMember(corpsGuid.Value, data.PlayerGUID);
         if (member == null || member.Job < 1) return;
         _corpsRepo.UpdateCorpsIntroduce(corpsGuid.Value, msg.Introduce);
+        PushCorpsDataToOnlineMembers(corpsGuid.Value);
     }
 
     private void HandleCorpsModTipName(GameSession session, PK_CH_CORPS_MOD_TIPNAME msg)
@@ -5400,6 +6176,7 @@ public class HallServer : GameServer
         var member = _corpsRepo.GetMember(corpsGuid.Value, data.PlayerGUID);
         if (member == null || member.Job < 1) return;
         _corpsRepo.UpdateCorpsTipName(corpsGuid.Value, msg.TipName);
+        PushCorpsDataToOnlineMembers(corpsGuid.Value);
     }
 
     private void HandleCorpsModName(GameSession session, PK_CH_CORPS_MOD_NAME msg)
@@ -5411,22 +6188,39 @@ public class HallServer : GameServer
         var member = _corpsRepo.GetMember(corpsGuid.Value, data.PlayerGUID);
         if (member == null || member.Job < 2) return;
         _corpsRepo.UpdateCorpsName(corpsGuid.Value, msg.CorpsName);
+        PushCorpsDataToOnlineMembers(corpsGuid.Value);
     }
+
+    private void HandleCorpsApply(GameSession session, PK_CHW_CORPS_APPLICATION msg)
+    {
+        var data = GetPlayerData(session);
+        if (data == null) return;
+        if (_corpsRepo.GetPlayerCorpsGUID(data.PlayerGUID).HasValue) return;
+        var corps = _corpsRepo.GetByGUID(msg.CorpsId);
+        if (corps == null || corps.State != 0)
+        {
+            session.Send(new PK_HC_Corps_Application_Res { CorpsGuid = msg.CorpsId, Flag = 0 });
+            return;
+        }
+        _corpsRepo.RemoveAllPlayerApplications(data.PlayerGUID);
+        _corpsRepo.AddApplication(msg.CorpsId, data.PlayerGUID, data.PlayerName);
+        session.Send(new PK_HC_Corps_Application_Res { CorpsGuid = msg.CorpsId, Flag = 1 });
+        // Notify online officers of the new application
+        foreach (var officer in _corpsRepo.GetMembers(msg.CorpsId).Where(m => m.Job >= 1))
+        {
+            var os = GetHallSession(officer.PlayerGUID);
+            if (os != null) { try { SendCorpsApplicationsToSession(os, msg.CorpsId); } catch { } }
+        }
+        Console.WriteLine($"[HS] Corps application: {data.PlayerName} -> {corps.CorpsName}");
+    }
+
     private void HandleCorpsApplicationReq(GameSession session, PK_CHW_CORPS_APPLICATION_REQ msg)
     {
         var data = GetPlayerData(session);
         if (data == null) return;
-        // Can't apply if already in a corps
-        if (_corpsRepo.GetPlayerCorpsGUID(data.PlayerGUID).HasValue) return;
-        // Target corps must actually exist in DB (otherwise FK fails)
-        var corps = _corpsRepo.GetByGUID(msg.CorpsId);
-        if (corps == null) return;
-        // Cancel any existing applications first to avoid UNIQUE / FK conflicts
-        _corpsRepo.RemoveAllPlayerApplications(data.PlayerGUID);
-        _corpsRepo.AddApplication(msg.CorpsId, data.PlayerGUID, data.PlayerName);
-        // Confirm application to client
-        session.Send(new PK_HC_Corps_Application_Res { CorpsGuid = msg.CorpsId, Flag = 1 });
-        Console.WriteLine($"[HS] Corps application: {data.PlayerName} -> {corps.CorpsName}");
+        var corpsGuid = _corpsRepo.GetPlayerCorpsGUID(data.PlayerGUID);
+        if (!corpsGuid.HasValue) return;
+        SendCorpsApplicationsToSession(session, corpsGuid.Value, msg.Bias);
     }
 
     private void HandleCorpsApplicationRep(GameSession session, PK_CHW_CORPS_APPLICATION_REP msg)
@@ -5438,30 +6232,39 @@ public class HallServer : GameServer
         var member = _corpsRepo.GetMember(corpsGuid.Value, data.PlayerGUID);
         if (member == null || member.Job < 1) return;
 
-        if (msg.AcceptState == 1)
+        var corps = _corpsRepo.GetByGUID(corpsGuid.Value);
+        if (corps == null) return;
+
+        bool accept = msg.State == 1;
+        foreach (var applicantGuid in msg.JoinGUIDList)
         {
-            var corps = _corpsRepo.GetByGUID(corpsGuid.Value);
-            if (corps != null && _corpsRepo.GetMemberCount(corpsGuid.Value) < corps.MaxMemberCount)
+            if (accept && !_corpsRepo.GetPlayerCorpsGUID(applicantGuid).HasValue
+                && _corpsRepo.GetMemberCount(corpsGuid.Value) < corps.MaxMemberCount)
             {
-                var applicant = _accountRepo.GetByPlayerGUID(msg.ApplicantGuid);
+                var applicant = _accountRepo.GetByPlayerGUID(applicantGuid);
                 if (applicant != null)
                 {
-                    _corpsRepo.AddMember(corpsGuid.Value, msg.ApplicantGuid, applicant.PlayerName, 0);
-                    _corpsRepo.RecalculateCorpsBattleCap(corpsGuid.Value);
+                    _corpsRepo.AddMember(corpsGuid.Value, applicantGuid, applicant.PlayerName, 0);
+                    _corpsRepo.UpdateMemberBattleCap(corpsGuid.Value, applicantGuid, applicant.BattleCap);
+                    _corpsRepo.RemoveAllPlayerApplications(applicantGuid);
+                    Console.WriteLine($"[HS] Corps application accepted: {applicant.PlayerName} -> {corps.CorpsName}");
                 }
             }
+            _corpsRepo.RemoveApplication(corpsGuid.Value, applicantGuid);
         }
-        _corpsRepo.RemoveApplication(corpsGuid.Value, msg.ApplicantGuid);
+        _corpsRepo.RecalculateCorpsBattleCap(corpsGuid.Value);
+        PushCorpsDataToOnlineMembers(corpsGuid.Value);
+        SendCorpsApplicationsToSession(session, corpsGuid.Value);
     }
 
     private void HandleCorpsSearch(GameSession session, PK_CHW_CORPS_SEARCH msg)
     {
         var results = string.IsNullOrWhiteSpace(msg.SearchName)
-            ? _corpsRepo.GetAllCorps(20)
+            ? _corpsRepo.GetAllCorps(50)
             : _corpsRepo.SearchCorps(msg.SearchName);
         var list = new PK_WHC_CORPS_LIST
         {
-            CorpsTotalCount = results.Count, CurrentPageCount = (ushort)results.Count,
+            CorpsTotalCount = results.Count, CurrentPageCount = 0,
             CurrentPageNumber = results.Count, CorpsList = new CorpsInfo[results.Count]
         };
         for (int i = 0; i < results.Count; i++)
@@ -5483,19 +6286,31 @@ public class HallServer : GameServer
 
     private void HandleCorpsQuery(GameSession session, PK_CHW_CORPS_QUERY msg)
     {
-        var corps = _corpsRepo.GetByGUID(msg.CorpsId);
-        if (corps == null) return;
-        var list = new PK_WHC_CORPS_LIST { CorpsTotalCount = 1, CurrentPageCount = 1, CurrentPageNumber = 1, CorpsList = new CorpsInfo[1] };
-        list.CorpsList[0] = new CorpsInfo
+        var all = _corpsRepo.GetAllCorps(200);
+        int pageSize = Math.Clamp(msg.PageNumb > 0 ? (int)msg.PageNumb : 10, 1, 50);
+        int skip = msg.PageCount * pageSize;
+        var page = all.Skip(skip).Take(pageSize).ToList();
+        var list = new PK_WHC_CORPS_LIST
         {
-            CorpsID = corps.CorpsGUID, CorpsName = corps.CorpsName, CorpsLevel = corps.CorpsLevel,
-            PlayerCount = (ushort)_corpsRepo.GetMemberCount(corps.CorpsGUID),
-            Notice = corps.Notice, Introduce = corps.Introduce,
-            CreateTime = corps.CreatedAt.ToString("yyyy-MM-dd HH:mm"),
-            State = corps.State, LeaderName = corps.LeaderName,
-            MaxMemberCount = corps.MaxMemberCount, BattleCap = corps.BattleCap,
-            MaxMemSize = corps.MaxMemberCount
+            CorpsTotalCount = all.Count,
+            CurrentPageCount = msg.PageCount,
+            CurrentPageNumber = page.Count,
+            CorpsList = new CorpsInfo[page.Count]
         };
+        for (int i = 0; i < page.Count; i++)
+        {
+            var c = page[i];
+            list.CorpsList[i] = new CorpsInfo
+            {
+                CorpsID = c.CorpsGUID, CorpsName = c.CorpsName, CorpsLevel = c.CorpsLevel,
+                PlayerCount = (ushort)_corpsRepo.GetMemberCount(c.CorpsGUID),
+                Notice = c.Notice, Introduce = c.Introduce,
+                CreateTime = c.CreatedAt.ToString("yyyy-MM-dd HH:mm"),
+                State = c.State, LeaderName = c.LeaderName,
+                MaxMemberCount = c.MaxMemberCount, BattleCap = c.BattleCap,
+                MaxMemSize = c.MaxMemberCount
+            };
+        }
         session.Send(list);
     }
 
@@ -5547,6 +6362,7 @@ public class HallServer : GameServer
         var member = _corpsRepo.GetMember(corpsGuid.Value, data.PlayerGUID);
         if (member == null || member.Job < 2) return;
         _corpsRepo.UpdateMemberJob(corpsGuid.Value, msg.MemberGuid, msg.NewJob);
+        PushCorpsDataToOnlineMembers(corpsGuid.Value);
     }
 
     private void HandleCorpsExpel(GameSession session, PK_CHW_CORPS_EXPEL msg)
@@ -5560,6 +6376,9 @@ public class HallServer : GameServer
         if (msg.MemberGuid == data.PlayerGUID) return;
         _corpsRepo.ExpelMember(corpsGuid.Value, msg.MemberGuid);
         _corpsRepo.RecalculateCorpsBattleCap(corpsGuid.Value);
+        var kickedSession = GetHallSession(msg.MemberGuid);
+        if (kickedSession != null) { try { kickedSession.Send(new PK_WHC_CorpsData { TroopsID = 0 }); } catch { } }
+        PushCorpsDataToOnlineMembers(corpsGuid.Value);
     }
 
     private void HandleCorpsClose(GameSession session, PK_CHW_CORPS_CLOSE msg)
@@ -5579,21 +6398,54 @@ public class HallServer : GameServer
             cmd.Parameters.AddWithValue("@state", newState);
             cmd.Parameters.AddWithValue("@cg", corpsGuid.Value);
             cmd.ExecuteNonQuery();
+            PushCorpsDataToOnlineMembers(corpsGuid.Value);
         }
+    }
+
+    private void HandleCorpsInvite(GameSession session, PK_CHW_CORPS_INVITE msg)
+    {
+        var data = GetPlayerData(session);
+        if (data == null) return;
+        var corpsGuid = _corpsRepo.GetPlayerCorpsGUID(data.PlayerGUID);
+        if (!corpsGuid.HasValue) return;
+        var member = _corpsRepo.GetMember(corpsGuid.Value, data.PlayerGUID);
+        if (member == null || member.Job < 1) return;
+        var corps = _corpsRepo.GetByGUID(corpsGuid.Value);
+        if (corps == null || _corpsRepo.GetMemberCount(corpsGuid.Value) >= corps.MaxMemberCount) return;
+        if (_corpsRepo.GetPlayerCorpsGUID(msg.MemGuid).HasValue) return; // already in a corps
+
+        var targetSession = GetHallSession(msg.MemGuid);
+        if (targetSession == null) return;
+
+        targetSession.Send(new PK_WHC_CORPS_INVITATION
+        {
+            PlayerGuid = msg.MemGuid,
+            InvitePlayerGuid = data.PlayerGUID,
+            PlayerName = data.PlayerName,
+            CorpsName = corps.CorpsName,
+            DataTime = (int)DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+        });
+        Console.WriteLine($"[HS] Corps invite: {data.PlayerName} invited {targetSession.PlayerName} to {corps.CorpsName}");
     }
 
     private void HandleCorpsInviteRep(GameSession session, PK_CHW_CORPS_INVITE_REP msg)
     {
         var data = GetPlayerData(session);
         if (data == null) return;
-        if (msg.AcceptState == 1)
-        {
-            var corpsGuid = _corpsRepo.GetPlayerCorpsGUID(data.PlayerGUID);
-            if (!corpsGuid.HasValue) return;
-            var corps = _corpsRepo.GetByGUID(corpsGuid.Value);
-            if (corps == null || _corpsRepo.GetMemberCount(corpsGuid.Value) >= corps.MaxMemberCount) return;
-            Console.WriteLine($"[HS] Corps invite accepted by {data.PlayerName}");
-        }
+        if (msg.AcceptState != 1) return;
+        if (_corpsRepo.GetPlayerCorpsGUID(data.PlayerGUID).HasValue) return;
+
+        var inviterCorpsGuid = _corpsRepo.GetPlayerCorpsGUID(msg.InvitePlayerGuid);
+        if (!inviterCorpsGuid.HasValue) return;
+        var corps = _corpsRepo.GetByGUID(inviterCorpsGuid.Value);
+        if (corps == null || _corpsRepo.GetMemberCount(inviterCorpsGuid.Value) >= corps.MaxMemberCount) return;
+
+        _corpsRepo.AddMember(inviterCorpsGuid.Value, data.PlayerGUID, data.PlayerName, 0);
+        _corpsRepo.UpdateMemberBattleCap(inviterCorpsGuid.Value, data.PlayerGUID, data.BattleCap);
+        _corpsRepo.RemoveAllPlayerApplications(data.PlayerGUID);
+        _corpsRepo.RecalculateCorpsBattleCap(inviterCorpsGuid.Value);
+        PushCorpsDataToOnlineMembers(inviterCorpsGuid.Value);
+        Console.WriteLine($"[HS] Corps invite accepted: {data.PlayerName} joined {corps.CorpsName}");
     }
 
     private void HandleCorpsAssignment(GameSession session, PK_CHW_CORPS_ASSIGNMENT msg)
@@ -6036,45 +6888,131 @@ public class HallServer : GameServer
         SendMoneyExpByGuid(session, data.PlayerGUID);
     }
 
+    private FriendInfoData BuildLiveFriendInfo(long friendGuid, string fallbackName, int relationType)
+    {
+        var acc = _accountRepo.GetByPlayerGUID(friendGuid);
+        string name = acc?.PlayerName ?? fallbackName;
+        return new FriendInfoData
+        {
+            FriendGUID = friendGuid,
+            FriendName = name,
+            RelationType = relationType,
+            OnlineState = ComputePlayerOnlineState(friendGuid),
+            HSIndex = 0,
+            TeamGUID = GetPlayerSquadGuid(friendGuid),
+        };
+    }
+
+    private void SendFriendList(GameSession session, long playerGuid)
+    {
+        var friends = _friendRepo.GetFriends(playerGuid);
+        var pkt = new PK_WHC_FriendList
+        {
+            PlayerGUID = playerGuid,
+            FriendCount = friends.Count,
+            Friends = new FriendInfoData[friends.Count],
+        };
+        for (int i = 0; i < friends.Count; i++)
+        {
+            pkt.Friends[i] = BuildLiveFriendInfo(friends[i].FriendGUID, friends[i].FriendName, friends[i].RelationType);
+        }
+        session.Send(pkt);
+    }
+
+    private void BroadcastFriendStateChanged(long targetGuid)
+    {
+        try
+        {
+            var owners = _friendRepo.GetOwnersHavingFriend(targetGuid);
+            if (owners.Count == 0) return;
+            foreach (var ownerGuid in owners)
+            {
+                var ownerSession = GetHallSession(ownerGuid);
+                if (ownerSession == null) continue;
+                var rel = _friendRepo.GetFriend(ownerGuid, targetGuid);
+                if (rel == null) continue;
+                try
+                {
+                    ownerSession.Send(new PK_WHC_UpdateFriendState
+                    {
+                        PlayerGUID = ownerGuid,
+                        FriendInfo = BuildLiveFriendInfo(targetGuid, rel.FriendName, rel.RelationType),
+                    });
+                }
+                catch { }
+            }
+        }
+        catch { }
+    }
+
     private void HandleFriendStateReq(GameSession session, PK_CHW_FriendStateReq msg)
     {
         var data = GetPlayerData(session);
         if (data == null) return;
-        var friends = _friendRepo.GetFriends(data.PlayerGUID);
-        Console.WriteLine($"[HS] Friend state req: {friends.Count} friends");
+        if (msg.FriendGuid != 0)
+        {
+            var rel = _friendRepo.GetFriend(data.PlayerGUID, msg.FriendGuid);
+            var info = BuildLiveFriendInfo(msg.FriendGuid, rel?.FriendName ?? string.Empty, rel?.RelationType ?? 2);
+            session.Send(new PK_WHC_UpdateFriendState { PlayerGUID = data.PlayerGUID, FriendInfo = info });
+        }
+        else
+        {
+            SendFriendList(session, data.PlayerGUID);
+        }
     }
 
     private void HandleFriendUpdate(GameSession session)
     {
         var data = GetPlayerData(session);
         if (data == null) return;
-        var friends = _friendRepo.GetFriends(data.PlayerGUID);
-        foreach (var friend in friends)
-        {
-            _friendRepo.UpdateFriendLevel(data.PlayerGUID, friend.FriendGUID, data.Level);
-        }
+        SendFriendList(session, data.PlayerGUID);
     }
 
     private void HandleFriendOperate(GameSession session, PK_CHW_FRIEND_OPERATE msg)
     {
         var data = GetPlayerData(session);
         if (data == null) return;
-        if (msg.OperType == 0)
+        if (msg.FriendGUID == 0 || msg.FriendGUID == data.PlayerGUID) return;
+
+        var target = _accountRepo.GetByPlayerGUID(msg.FriendGUID);
+        if (target == null) return;
+
+        // OperateType: 0=AddFriend, 1=DeleteFriend, 2=AddBlock, 3=DeleteBlock
+        int finalRelation;
+        switch (msg.OperType)
         {
-            var target = _accountRepo.GetByUsername(msg.FriendName);
-            if (target != null && !_friendRepo.IsFriend(data.PlayerGUID, target.PlayerGUID))
-            {
-                _friendRepo.AddFriend(data.PlayerGUID, target.PlayerGUID, target.PlayerName);
-                session.Send(new PK_WHC_FRIEND_OPERATE_RES { OperType = msg.OperType, Result = 1 });
-            }
-            else session.Send(new PK_WHC_FRIEND_OPERATE_RES { OperType = msg.OperType, Result = 0 });
+            case 0: // AddFriend
+                if (!_friendRepo.IsFriend(data.PlayerGUID, target.PlayerGUID))
+                    _friendRepo.AddFriend(data.PlayerGUID, target.PlayerGUID, target.PlayerName);
+                _friendRepo.SetRelationType(data.PlayerGUID, target.PlayerGUID, 0);
+                finalRelation = 0; // Friend
+                break;
+            case 1: // DeleteFriend
+                _friendRepo.RemoveFriend(data.PlayerGUID, target.PlayerGUID);
+                finalRelation = 2; // Unconcerned
+                break;
+            case 2: // AddBlock
+                if (!_friendRepo.IsFriend(data.PlayerGUID, target.PlayerGUID))
+                    _friendRepo.AddFriend(data.PlayerGUID, target.PlayerGUID, target.PlayerName);
+                _friendRepo.SetRelationType(data.PlayerGUID, target.PlayerGUID, 1);
+                finalRelation = 1; // Block
+                break;
+            case 3: // DeleteBlock
+                _friendRepo.RemoveFriend(data.PlayerGUID, target.PlayerGUID);
+                finalRelation = 2; // Unconcerned
+                break;
+            default:
+                return;
         }
-        else if (msg.OperType == 1)
+
+        var res = new PK_WHC_FRIEND_OPERATE_RES
         {
-            var target = _accountRepo.GetByUsername(msg.FriendName);
-            if (target != null) _friendRepo.RemoveFriend(data.PlayerGUID, target.PlayerGUID);
-            session.Send(new PK_WHC_FRIEND_OPERATE_RES { OperType = msg.OperType, Result = 1 });
-        }
+            PlayerGUID = data.PlayerGUID,
+            FriendInfo = BuildLiveFriendInfo(target.PlayerGUID, target.PlayerName, finalRelation),
+            OperType = msg.OperType,
+        };
+        session.Send(res);
+        Console.WriteLine($"[HS] FriendOperate: {data.PlayerName} op={msg.OperType} target={target.PlayerName} (rel={finalRelation})");
     }
 
     private void HandleDomainBidding(GameSession session, PK_CHW_Domain_Bidding msg)
@@ -6101,11 +7039,16 @@ public class HallServer : GameServer
 
     private void HandlePlayerQuery(GameSession session, PK_CHW_PLAYER_QUERY msg)
     {
-        var target = _accountRepo.GetByUsername(msg.PlayerName);
-        if (target != null)
-            session.Send(new PK_WHC_PLAYER_QUERY_RES { PlayerGuid = target.PlayerGUID, PlayerName = target.PlayerName, Level = target.Level, BattleCap = target.BattleCap });
-        else
-            session.Send(new PK_WHC_PLAYER_QUERY_RES { PlayerName = msg.PlayerName });
+        var matches = _accountRepo.SearchAccountsByName(msg.PlayerName, 20)
+            .Where(a => a.PlayerGUID != session.PlayerGUID)
+            .Select(a => new ChannelPlayerEntry { Guid = a.PlayerGUID, Name = a.PlayerName })
+            .ToArray();
+        session.Send(new PK_WHC_PLAYER_QUERY_RES
+        {
+            PlayerGUID = session.PlayerGUID,
+            Results = matches,
+        });
+        Console.WriteLine($"[HS] PlayerQuery '{msg.PlayerName}' by {session.PlayerName}: {matches.Length} match(es)");
     }
 
     private void HandleCorpsBidPlaceBid(GameSession session, PK_CHW_CorpsBid_PlaceBid msg)
@@ -6187,10 +7130,13 @@ public class HallServer : GameServer
     {
         _friendRepo.SetOnlineStatus(session.PlayerGUID, false);
         _hallByGuid.TryRemove(session.PlayerGUID, out _);   // v13
+        RemovePlayerFromSquad(session.PlayerGUID, sendLeavePacket: false);
         lock (_matchLock)
         {
             RemovePlayerFromWaitingLobbiesLocked(session.PlayerGUID);
         }
+        BroadcastFriendStateChanged(session.PlayerGUID);
+        BroadcastOnlineHallChannel();
     }
 }
 
