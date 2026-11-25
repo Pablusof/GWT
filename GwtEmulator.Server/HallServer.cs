@@ -60,6 +60,29 @@ public class HallServer : GameServer
     public static GameSession? GetHallSession(long playerGuid) =>
         _hallByGuid.TryGetValue(playerGuid, out var s) && s.IsConnected ? s : null;
 
+    /// <summary>
+    /// Returns true if an account with the given PlayerGUID already has a live HallServer
+    /// connection from a different IP address (used by LoginServer to avoid two friends
+    /// colliding on the same PlayerGUID and kicking each other out of matches).
+    /// </summary>
+    public static bool IsGuidOnlineFromOtherIp(long playerGuid, string? remoteEndPoint)
+    {
+        if (!_hallByGuid.TryGetValue(playerGuid, out var existing) || !existing.IsConnected)
+            return false;
+        string ipA = ExtractBareIp(existing.RemoteEndPoint);
+        string ipB = ExtractBareIp(remoteEndPoint);
+        if (string.IsNullOrEmpty(ipA) || string.IsNullOrEmpty(ipB))
+            return false;
+        return !string.Equals(ipA, ipB, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string ExtractBareIp(string? endpoint)
+    {
+        if (string.IsNullOrWhiteSpace(endpoint)) return string.Empty;
+        int colon = endpoint.LastIndexOf(':');
+        return colon > 0 ? endpoint[..colon].Trim() : endpoint.Trim();
+    }
+
     // v: общая логика сборки и отправки ВСЕЙ статистики игрока (основная вкладка +
     // Revive/Commander/PVE + "карточка статистики" AccountFightStatistics). Раньше
     // это считалось только один раз при HandleHallLogin — после боёв (которые идут
@@ -1730,7 +1753,7 @@ public class HallServer : GameServer
             foreach (var k in emptyLobbies) _waitingLobbies.Remove(k);
 
             var endedRooms = _activeRoomsByMode
-                .Where(kv => !BattleModeRegistry.IsRoomActive(kv.Value.RoomGuid) || !kv.Value.Session.IsConnected)
+                .Where(kv => !BattleModeRegistry.IsRoomActive(kv.Value.RoomGuid))
                 .Select(kv => kv.Key)
                 .ToList();
             foreach (var k in endedRooms) _activeRoomsByMode.Remove(k);
@@ -1739,7 +1762,9 @@ public class HallServer : GameServer
             if (_waitingLobbies.TryGetValue(normMode, out var openLobby)
                 && openLobby.Entries.Count < maxHumansInMode)
             {
-                openLobby.Entries.RemoveAll(e => e.PlayerGuid == session.PlayerGUID);
+                int replaced = openLobby.Entries.RemoveAll(e => e.PlayerGuid == session.PlayerGUID);
+                if (replaced > 0)
+                    Console.WriteLine($"[HS] Warning: duplicate PlayerGUID={session.PlayerGUID} in queue lobby {openLobby.RoomGuid} ({session.RemoteEndPoint})");
                 var joinEntry = new MatchEntry(session, session.PlayerGUID, tankGuid, openLobby.RoomGuid, mode, normMode, level, myTier, openLobby.WaitCts);
                 openLobby.Entries.Add(joinEntry);
 
@@ -1849,6 +1874,7 @@ public class HallServer : GameServer
         {
             try
             {
+                Console.WriteLine($"[HS]   -> JoinRoomRes P={e.PlayerGuid} ({e.Session.RemoteEndPoint}) room={lobby.RoomGuid}");
                 e.Session.Send(new PK_HC_JoinRoomRes
                 {
                     Flag = 1,

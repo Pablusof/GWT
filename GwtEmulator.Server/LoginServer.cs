@@ -123,6 +123,28 @@ public class LoginServer : GameServer
             // Try to find by old garbage name too (migration)
             account = _accountRepo.GetByUsername(login.PlayerName);
         }
+        // Prevent two friends on different PCs from logging into the same PlayerGUID
+        // simultaneously (which would kick one of them out of matchmaking/battle rooms).
+        if (account != null && HallServer.IsGuidOnlineFromOtherIp(account.PlayerGUID, session.RemoteEndPoint))
+        {
+            string baseName = cleanName.Length > 17 ? cleanName[..17] : cleanName;
+            string resolvedName = baseName + "_2";
+            Account? resolvedAcc = null;
+            for (int suffix = 2; suffix <= 99; suffix++)
+            {
+                string cand = $"{baseName}_{suffix}";
+                var existing = _accountRepo.GetByUsername(cand);
+                if (existing == null || !HallServer.IsGuidOnlineFromOtherIp(existing.PlayerGUID, session.RemoteEndPoint))
+                {
+                    resolvedName = cand;
+                    resolvedAcc = existing;
+                    break;
+                }
+            }
+            Console.WriteLine($"[LS] Account '{cleanName}' (GUID={account.PlayerGUID}) is already online from another IP; assigning '{resolvedName}' to {session.RemoteEndPoint}");
+            cleanName = resolvedName;
+            account = resolvedAcc;
+        }
         if (account == null)
         {
             account = _accountRepo.CreateAccount(cleanName, login.PassWord, cleanName);

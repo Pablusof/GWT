@@ -2876,94 +2876,124 @@ public class RoomServer : GameServer
             BattleLevel            = room.BattleLevel,
             FastChangeShell        = player.FastChangeShell,
         };
-        // ── Hot-join: battle already running → add this player live ─────────
-        // (Host/earlier group already entered; late friend picked the same mode and joined.)
-        if (room.BattleStarted && !room.BattleEnded)
-        {
-            Console.WriteLine($"[RS] Hot-join: {login.PlayerGUID} into running room {room.RoomGUID}");
-            var existingHuman = room.Players.Values.FirstOrDefault(p => !p.IsBot && p.PlayerGUID != player.PlayerGUID);
-            // Put the joiner on the opposite team for PvP, same team (Group 0) for Defense (co-op)
-            player.Group = mode == BattleGameMode.Defense || existingHuman == null
-                ? (byte)0
-                : (byte)(1 - existingHuman.Group);
-            (player.PosX, player.PosZ) = PickSpawnSpot(room, player.Group);
-            player.PosY = GetSpawnY(player.Group, room.MapId);
-            player.RotY = GetSpawnYaw(room.MapId, player.Group);
-            room.PendingHumans.Remove(player);
-
-            // Defense has strictly 6 defenders (Team 0): replace an ally bot when a human hot-joins!
-            if (mode == BattleGameMode.Defense)
-            {
-                while (room.Players.Values.Count(p => p.Group == 0) > 6)
-                {
-                    var allyBot = room.Players.Values.FirstOrDefault(p => p.IsBot && p.Group == 0);
-                    if (allyBot == null) break;
-                    DespawnWaveBot(room, allyBot);
-                }
-            }
-
-            SendLoginSuccessForPlayer(player, room, mode, littleBattleMode, warModel);
-            // Sync active wave counter/enemy count if Defense wave already rolled
-            if (mode == BattleGameMode.Defense && room.CurrentWave > 0)
-            {
-                try
-                {
-                    player.Session.Send(new PK_RC_PVE_RoundBegin { ReadyTime = 0, CurRound = room.CurrentWave, CurRoundCD = 0 });
-                    player.Session.Send(new PK_RC_PVE_Enemy { CurEnemyNum = room.CurrentWaveEnemies });
-                }
-                catch { }
-            }
-            // Tell existing humans about the newcomer via NewPlayerLogin (spawns live tank without resetting battle)
-            BroadcastToOthers(room, player.PlayerGUID, new PK_RC_NewPlayerLogin
-            {
-                PlayerInfo = BuildPlayerInfo(player),
-            });
-            return;
-        }
-
-        // ── Multiplayer: wait for all expected players (with 15s anti-hang timeout) ──
+        // ── Unified atomic decision: initial multi-player start vs hot-join ──
+        // Checking BattleStarted/BattleStarting and mutating PendingHumans inside ONE
+        // lock prevents late joiners from ever being dropped during bot spawning or
+        // silently skipped when BattleStarted flips mid-login.
+        bool isHotJoin = false;
         bool shouldStartNow = false;
         lock (room.StartLock)
         {
-            if (room.BattleStarted || room.BattleEnded) return;
-            room.ExpectedHumanCount = Math.Max(1, BattleModeRegistry.GetExpectedPlayers(room.RoomGUID));
-            if (!room.PendingHumans.Contains(player))
-                room.PendingHumans.Add(player);
-            room.DeferredStartParams = (littleBattleMode, warModel, mode);
-
-            if (room.PendingHumans.Count >= room.ExpectedHumanCount)
+            if (room.BattleEnded) return;
+            if (room.BattleStarted || room.BattleStarting)
             {
-                shouldStartNow = true;
+                isHotJoin = true;
             }
-            else if (!room.DeferredWaitStarted)
+            else
             {
-                room.DeferredWaitStarted = true;
-                Console.WriteLine($"[RS] Room {room.RoomGUID}: {room.PendingHumans.Count}/{room.ExpectedHumanCount} players — waiting up to 15s for remaining players...");
-                _ = Task.Run(async () =>
+                room.ExpectedHumanCount = Math.Max(room.ExpectedHumanCount, Math.Max(1, BattleModeRegistry.GetExpectedPlayers(room.RoomGUID)));
+                if (!room.PendingHumans.Contains(player))
+                    room.PendingHumans.Add(player);
+                room.DeferredStartParams = (littleBattleMode, warModel, mode);
+
+                if (room.PendingHumans.Count >= room.ExpectedHumanCount)
                 {
-                    await Task.Delay(15_000);
-                    bool forceStart = false;
-                    (byte lm, byte wm, BattleGameMode gm) p = default;
-                    lock (room.StartLock)
+                    room.BattleStarting = true;
+                    shouldStartNow = true;
+                }
+                else if (!room.DeferredWaitStarted)
+                {
+                    room.DeferredWaitStarted = true;
+                    Console.WriteLine($"[RS] Room {room.RoomGUID}: {room.PendingHumans.Count}/{room.ExpectedHumanCount} players — waiting up to 15s for remaining players...");
+                    _ = Task.Run(async () =>
                     {
-                        if (!room.BattleStarted && !room.BattleEnded && room.PendingHumans.Count > 0 && room.DeferredStartParams.HasValue)
+                        await Task.Delay(15_000);
+                        bool forceStart = false;
+                        (byte lm, byte wm, BattleGameMode gm) p = default;
+                        lock (room.StartLock)
                         {
-                            room.ExpectedHumanCount = room.PendingHumans.Count;
-                            p = room.DeferredStartParams.Value;
-                            forceStart = true;
+                            if (!room.BattleStarted && !room.BattleStarting && !room.BattleEnded
+                                && room.PendingHumans.Count > 0 && room.DeferredStartParams.HasValue)
+                            {
+                                room.ExpectedHumanCount = room.PendingHumans.Count;
+                                room.BattleStarting = true;
+                                p = room.DeferredStartParams.Value;
+                                forceStart = true;
+                            }
                         }
-                    }
-                    if (forceStart)
-                    {
-                        Console.WriteLine($"[RS] Room {room.RoomGUID}: 15s wait timeout -> starting with {room.PendingHumans.Count} connected player(s)");
-                        StartPendingRoom(room, p.lm, p.wm, p.gm);
-                    }
-                });
+                        if (forceStart)
+                        {
+                            Console.WriteLine($"[RS] Room {room.RoomGUID}: 15s wait timeout -> starting with {room.PendingHumans.Count} connected player(s)");
+                            StartPendingRoom(room, p.lm, p.wm, p.gm);
+                        }
+                    });
+                }
             }
         }
 
+        if (isHotJoin)
+        {
+            HotJoinRunningRoom(room, player, mode, littleBattleMode, warModel);
+            return;
+        }
         if (!shouldStartNow) return;
         StartPendingRoom(room, littleBattleMode, warModel, mode);
+    }
+
+    private void HotJoinRunningRoom(BattleRoom room, RoomPlayer player, BattleGameMode mode, byte littleBattleMode, byte warModel)
+    {
+        // Wait briefly if StartPendingRoom is still spawning initial bots.
+        room.BattleInitDone.Wait(5000);
+        if (room.BattleEnded) return;
+
+        Console.WriteLine($"[RS] Hot-join: {player.PlayerGUID} into running room {room.RoomGUID}");
+        if (mode == BattleGameMode.Defense)
+        {
+            player.Group = 0;
+        }
+        else
+        {
+            int humansOn0 = room.Players.Values.Count(p => !p.IsBot && p.PlayerGUID != player.PlayerGUID && p.Group == 0);
+            int humansOn1 = room.Players.Values.Count(p => !p.IsBot && p.PlayerGUID != player.PlayerGUID && p.Group == 1);
+            player.Group = humansOn0 <= humansOn1 ? (byte)0 : (byte)1;
+        }
+        (player.PosX, player.PosZ) = PickSpawnSpot(room, player.Group);
+        player.PosY = SampleHeight(room, player.PosX, player.PosZ);
+        player.RotY = GetSpawnYaw(room.MapId, player.Group);
+        lock (room.StartLock) { room.PendingHumans.Remove(player); }
+
+        // Keep team sizes capped (Defense = 6 defenders on Group 0, PvP = 7 per team) by replacing a bot.
+        int teamCap = mode == BattleGameMode.Defense ? 6 : 7;
+        while (room.Players.Values.Count(p => p.Group == player.Group) > teamCap)
+        {
+            var allyBot = room.Players.Values.FirstOrDefault(p => p.IsBot && p.Group == player.Group);
+            if (allyBot == null) break;
+            if (mode == BattleGameMode.Defense)
+            {
+                DespawnWaveBot(room, allyBot);
+            }
+            else
+            {
+                room.Players.TryRemove(allyBot.PlayerGUID, out _);
+                _players.TryRemove(allyBot.PlayerGUID, out _);
+                BroadcastToOthers(room, player.PlayerGUID, new PK_RC_PlayerLogout { PlayerGUID = allyBot.PlayerGUID });
+            }
+        }
+
+        SendLoginSuccessForPlayer(player, room, mode, littleBattleMode, warModel);
+        if (mode == BattleGameMode.Defense && room.CurrentWave > 0)
+        {
+            try
+            {
+                player.Session.Send(new PK_RC_PVE_RoundBegin { ReadyTime = 0, CurRound = room.CurrentWave, CurRoundCD = 0 });
+                player.Session.Send(new PK_RC_PVE_Enemy { CurEnemyNum = room.CurrentWaveEnemies });
+            }
+            catch { }
+        }
+        BroadcastToOthers(room, player.PlayerGUID, new PK_RC_NewPlayerLogin
+        {
+            PlayerInfo = BuildPlayerInfo(player),
+        });
     }
 
     private void StartPendingRoom(BattleRoom room, byte littleBattleMode, byte warModel, BattleGameMode mode)
@@ -2971,9 +3001,18 @@ public class RoomServer : GameServer
         List<RoomPlayer> humansSnapshot;
         lock (room.StartLock)
         {
-            if (room.BattleStarted || room.BattleEnded || room.PendingHumans.Count == 0) return;
+            if (room.BattleStarted || room.BattleEnded || room.PendingHumans.Count == 0)
+            {
+                room.BattleInitDone.Set();
+                return;
+            }
+            room.BattleStarting = true;
+            room.BattleStarted  = true;
             humansSnapshot = room.PendingHumans.ToList();
+            room.PendingHumans.Clear();
         }
+        try
+        {
 
         var firstHuman = humansSnapshot[0];
         var tank       = _tankRepo.GetPlayerTanks(firstHuman.PlayerGUID).FirstOrDefault(t => t.TankGUID == firstHuman.TankGUID);
@@ -3202,16 +3241,14 @@ public class RoomServer : GameServer
 
         // Send full startup sequence (LoginSuccess + SceneInfo + PlayerList + TankBattleData +
         // Countdown + Score + HideEnemies + PVE init) to ALL waiting humans now that all bots exist.
-        lock (room.StartLock) { room.PendingHumans.Clear(); }
         foreach (var ph in humansSnapshot)
         {
             SendLoginSuccessForPlayer(ph, room, mode, littleBattleMode, warModel);
         }
 
         // ── start battle once players & bots are in room ─────────────────────
-        if (room.Players.Count >= 2 && !room.BattleStarted)
+        if (room.Players.Count >= 2)
         {
-            room.BattleStarted  = true;
             room.StartedUnix    = (int)DateTimeOffset.UtcNow.ToUnixTimeSeconds(); // v12: для статистики
             // Pre-battle prep countdown: SHORT for Defense (waves come fast), longer for
             // the PvP modes. Lock combat for 3 s load + prep up front, before the AI
@@ -3325,6 +3362,11 @@ public class RoomServer : GameServer
 
             StartBotAI(room, group, mode == BattleGameMode.Defense);
         }
+        }
+        finally
+        {
+            room.BattleInitDone.Set();
+        }
     }
 
     private static void SendHideEnemies(GameSession session, long[] guids)
@@ -3339,18 +3381,24 @@ public class RoomServer : GameServer
 
     private static PK_RC_TankMoveDictate BuildSnapshotMovePacket(RoomPlayer p)
     {
-        p.MoveNumber++;
+        // Bots own their MoveNumber on the server; humans own their MoveNumber on the client.
+        // Never overwrite/lag a human's MoveNumber or zero out their active velocity on reveal —
+        // otherwise client TankMoveSynchronization drops the snapshot (_currentTankMoveNumber > MoveNumber)
+        // or snaps/teleports when the next real move arrives.
+        short moveNum = p.IsBot ? ++p.MoveNumber : p.MoveNumber;
         return new PK_RC_TankMoveDictate
         {
             PlayerGuid  = p.PlayerGUID,
-            DictateInfo = 0,
-            SpeedX = 0f, SpeedY = 0f, SpeedZ = 0f,
-            MoveNumber  = p.MoveNumber,
+            DictateInfo = p.IsBot ? (byte)0 : p.LastDictateCode,
+            SpeedX = p.IsBot ? 0f : p.SpeedX,
+            SpeedY = p.IsBot ? 0f : p.SpeedY,
+            SpeedZ = p.IsBot ? 0f : p.SpeedZ,
+            MoveNumber  = moveNum,
             PosX = p.PosX, PosY = p.PosY, PosZ = p.PosZ,
             RotX = p.IsBot ? p.RenderPitch : p.RotX,
             RotY = p.IsBot ? p.LastYaw     : p.RotY,
             RotZ = p.IsBot ? p.RenderRoll  : p.RotZ,
-            GunAngle    = 0f,
+            GunAngle    = p.IsBot ? 0f : p.LastGunAngle,
             TurretAngle = p.IsBot ? p.CurrentTurretAngle : p.TowerRotY,
             CruiseGrade = 0,
             SlideSpeedX = 0, SlideSpeedY = 0, SlideSpeedZ = 0,
@@ -6505,8 +6553,12 @@ public class RoomServer : GameServer
         float velX   = MathF.Sin(yawRad) * player.CurrentSpeedMps;
         float velZ   = MathF.Cos(yawRad) * player.CurrentSpeedMps;
         player.SpeedX = velX;
+        player.SpeedY = 0f;
         player.SpeedZ = velZ;
         player.TowerRotY = move.TurretAngle;
+        player.LastGunAngle = move.GunAngle;
+        player.LastDictateCode = move.DictateInfo;
+        if (move.MoveNumber >= 0) player.MoveNumber = move.MoveNumber;
 
         var fullMove = new PK_RC_TankMoveDictate
         {
@@ -6534,20 +6586,23 @@ public class RoomServer : GameServer
         player.RotX = move.RotX; player.RotY = move.RotY; player.RotZ = move.RotZ;
         player.SpeedX = move.SpeedX; player.SpeedY = move.SpeedY; player.SpeedZ = move.SpeedZ;
         player.RotateSpeed = move.RotateSpeed;
+        player.LastDictateCode = move.KeyCode;
 
         player.MoveNumber++;
+        var movePkt = new PK_RC_TankMoveDictate
+        {
+            PlayerGuid  = session.PlayerGUID,
+            DictateInfo = move.KeyCode,
+            SpeedX = move.SpeedX, SpeedY = move.SpeedY, SpeedZ = move.SpeedZ,
+            MoveNumber  = player.MoveNumber,
+            PosX = move.PosX, PosY = move.PosY, PosZ = move.PosZ,
+            RotX = move.RotX, RotY = move.RotY, RotZ = move.RotZ,
+            GunAngle = player.LastGunAngle, TurretAngle = player.TowerRotY, CruiseGrade = 0,
+            SlideSpeedX = 0, SlideSpeedY = 0, SlideSpeedZ = 0,
+        };
+        try { session.Send(movePkt); } catch { }
         if (player.Room != null)
-            BroadcastToRoom(player.Room, new PK_RC_TankMoveDictate
-            {
-                PlayerGuid  = session.PlayerGUID,
-                DictateInfo = move.KeyCode,
-                SpeedX = move.SpeedX, SpeedY = move.SpeedY, SpeedZ = move.SpeedZ,
-                MoveNumber  = player.MoveNumber,
-                PosX = move.PosX, PosY = move.PosY, PosZ = move.PosZ,
-                RotX = move.RotX, RotY = move.RotY, RotZ = move.RotZ,
-                GunAngle = 0, TurretAngle = 0, CruiseGrade = 0,
-                SlideSpeedX = 0, SlideSpeedY = 0, SlideSpeedZ = 0,
-            });
+            BroadcastBotMove(player.Room, player, movePkt, excludeGuid: player.PlayerGUID);
     }
 
     // ─────────────────────────── firing ────────────────────────────────────────
@@ -8557,11 +8612,13 @@ public class RoomServer : GameServer
             {
                 room.PendingHumans.Remove(player);
                 room.Players.TryRemove(session.PlayerGUID, out _);
-                if (!room.BattleStarted && !room.BattleEnded && room.PendingHumans.Count > 0)
+                BattleModeRegistry.RemoveHuman(room.RoomGUID, session.PlayerGUID);
+                if (!room.BattleStarted && !room.BattleStarting && !room.BattleEnded && room.PendingHumans.Count > 0)
                 {
                     room.ExpectedHumanCount = Math.Min(room.ExpectedHumanCount, room.PendingHumans.Count);
                     if (room.DeferredStartParams.HasValue && room.PendingHumans.Count >= room.ExpectedHumanCount)
                     {
+                        room.BattleStarting = true;
                         p = room.DeferredStartParams.Value;
                         startNow = true;
                     }
@@ -8823,6 +8880,8 @@ public class BattleRoom
     public const float HeightCellSize = 40f; // world units per grid cell
 
     public object           StartLock            { get; } = new();
+    public bool             BattleStarting       { get; set; }
+    public ManualResetEventSlim BattleInitDone   { get; } = new(false);
     public bool             DeferredWaitStarted  { get; set; }
     public int              ExpectedHumanCount   { get; set; } = 1;
     /// <summary>Humans who have sent NM_CR_PlayerLogin but haven't received success yet.</summary>
@@ -9004,6 +9063,8 @@ public class RoomPlayer
     public DateTime BotSkillAmmoCd     { get; set; }
     public DateTime BotSkillStimCd     { get; set; }
     public short    MoveNumber         { get; set; }
+    public byte     LastDictateCode    { get; set; }
+    public float    LastGunAngle       { get; set; }
 
     // ── Combat equipment flags (Table_Equipment special & defense-only effects) ──
     public float    DamageTakenMult       { get; set; } = 1f;

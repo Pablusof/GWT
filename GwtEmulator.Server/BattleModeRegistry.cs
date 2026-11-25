@@ -64,6 +64,12 @@ public static class BattleModeRegistry
     public static int GetRoomHumanCount(long roomGuid) =>
         _roomHumans.TryGetValue(roomGuid, out var dict) ? dict.Count : 0;
 
+    public static void RemoveHuman(long roomGuid, long playerGuid)
+    {
+        if (_roomHumans.TryGetValue(roomGuid, out var dict))
+            dict.TryRemove(playerGuid, out _);
+    }
+
     public static void Clear(long roomGuid, long playerGuid)
     {
         _byRoom.TryRemove(roomGuid,     out _);
