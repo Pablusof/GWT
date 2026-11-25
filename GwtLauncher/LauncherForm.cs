@@ -52,6 +52,13 @@ public sealed class LauncherForm : Form, IBackdropProvider
     private sealed record ChangelogEntry(string Version, string Date, string Badge, Color BadgeColor, string[] Bullets);
     private static readonly ChangelogEntry[] ChangelogEntries =
     {
+        new("v1.5.0", "25 ноября 2026", "ОБНОВЛЕНИЕ", SpaceTheme.AccentGreen, new[]
+        {
+            "Оборона: бомбардировщики < 30% ХП (КД 30 с), Катюша ~10% ХП (КД 60 с), починена починка, ровно 2 спавна врагов.",
+            "Новые умные боты (фронты на всю карту, плавная физика, распределение огня), рентген 72 м и плавный таран без дёрганий.",
+            "Социалка и онлайн: список игроков в канале и команда /online в чате, друзья с живым статусом, взводы (в одну команду) и кланы.",
+            "Мультиплеер: вход 2+ игроков в один бой, 20 с подбор с живыми игроками, исправлены выход из очереди и телепорты при засвете.",
+        }),
 #if PLAYER_EDITION
         new("v1.4.1", "25 ноября 2026", "ИГРОК", SpaceTheme.AccentCyan, new[]
         {
@@ -78,6 +85,9 @@ public sealed class LauncherForm : Form, IBackdropProvider
             "Исправлены покупка, установка, ремонт и автопополнение в ангаре.",
         }),
     };
+
+    private List<ChangelogEntry> _activeChangelog = new(ChangelogEntries);
+    private int _patchesScrollY;
 
     private struct EmberParticle
     {
@@ -443,6 +453,12 @@ public sealed class LauncherForm : Form, IBackdropProvider
 
         _patchesOverlay.Controls.Add(_patchesModeToggleBtn);
         _patchesOverlay.Controls.Add(_consoleHostPanel);
+        _patchesOverlay.MouseWheel += (_, e) => ScrollPatchesBy(-e.Delta / 3);
+        MouseWheel += (_, e) =>
+        {
+            if (_activeTab == LauncherTab.Patches && !_showingLogInPatches)
+                ScrollPatchesBy(-e.Delta / 3);
+        };
 
         // ---------------- RIGHT-SIDE SETTINGS DRAWER ----------------
         _settingsDrawer = new SpaceGlassPanel
@@ -783,12 +799,7 @@ public sealed class LauncherForm : Form, IBackdropProvider
 
         // Pre-bake full Patches overlay (dim + changelog cards) once so fade in/out runs at 60 FPS with zero flicker
         _patchesCardSprite = new Bitmap(1020, 434, PixelFormat.Format32bppPArgb);
-        using (var pg = Graphics.FromImage(_patchesCardSprite))
-        {
-            using var dim = new SolidBrush(Color.FromArgb(232, 11, 13, 18));
-            pg.FillRectangle(dim, 0, 0, 1020, 434);
-            DrawChangelogContent(pg, 1f);
-        }
+        RebakePatchesCardSprite();
 
         for (int i = 0; i < _embers.Length; i++)
         {
@@ -1015,13 +1026,83 @@ public sealed class LauncherForm : Form, IBackdropProvider
             SpaceTheme.TextMuted, TextFormatFlags.NoPadding);
     }
 
+    private void RebakePatchesCardSprite()
+    {
+        if (_patchesCardSprite == null) return;
+        using var pg = Graphics.FromImage(_patchesCardSprite);
+        pg.Clear(Color.Transparent);
+        using var dim = new SolidBrush(Color.FromArgb(232, 11, 13, 18));
+        pg.FillRectangle(dim, 0, 0, 1020, 434);
+        DrawChangelogContent(pg, 1f);
+    }
+
+    private int GetPatchesMaxScroll()
+    {
+        int totalH = 0;
+        foreach (var entry in _activeChangelog)
+            totalH += 38 + entry.Bullets.Length * 21 + 10 + 10;
+        const int viewportH = 332; // y=92..424
+        return Math.Max(0, totalH - viewportH);
+    }
+
+    private void ScrollPatchesBy(int deltaY)
+    {
+        int maxScroll = GetPatchesMaxScroll();
+        int next = Math.Clamp(_patchesScrollY + deltaY, 0, maxScroll);
+        if (next == _patchesScrollY) return;
+        _patchesScrollY = next;
+        RebakePatchesCardSprite();
+        _patchesOverlay.Invalidate(false);
+    }
+
+    private void MergeRemotePatchNotes(List<ManifestPatchNote>? remoteNotes)
+    {
+        if (remoteNotes == null || remoteNotes.Count == 0) return;
+        var merged = new List<ChangelogEntry>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var note in remoteNotes)
+        {
+            if (string.IsNullOrWhiteSpace(note.Version) || note.Bullets == null || note.Bullets.Count == 0)
+                continue;
+            Color badgeCol = note.Color?.ToLowerInvariant() switch
+            {
+                "red" => SpaceTheme.AccentRedBright,
+                "cyan" => SpaceTheme.AccentCyan,
+                "orange" or "amber" => SpaceTheme.AccentAmber,
+                _ => SpaceTheme.AccentGreen,
+            };
+            if (seen.Add(note.Version.Trim()))
+            {
+                merged.Add(new ChangelogEntry(
+                    note.Version.Trim(),
+                    note.Date?.Trim() ?? string.Empty,
+                    string.IsNullOrWhiteSpace(note.Badge) ? "ПАТЧ" : note.Badge.Trim().ToUpperInvariant(),
+                    badgeCol,
+                    note.Bullets.ToArray()));
+            }
+        }
+        foreach (var builtIn in ChangelogEntries)
+        {
+            if (seen.Add(builtIn.Version))
+                merged.Add(builtIn);
+        }
+        if (merged.Count > 0)
+        {
+            _activeChangelog = merged;
+            _patchesScrollY = Math.Clamp(_patchesScrollY, 0, GetPatchesMaxScroll());
+            RebakePatchesCardSprite();
+            _patchesOverlay.Invalidate(false);
+        }
+    }
+
     private void PaintPatchesOverlay(object? sender, PaintEventArgs e)
     {
         if (_showingLogInPatches) return;
         DrawChangelogContent(e.Graphics, 1f);
     }
 
-    private static void DrawChangelogContent(Graphics g, float fade)
+    private void DrawChangelogContent(Graphics g, float fade)
     {
         if (fade <= 0.02f) return;
 
@@ -1042,43 +1123,68 @@ public sealed class LauncherForm : Form, IBackdropProvider
         TextRenderer.DrawText(g, "СПИСОК ИЗМЕНЕНИЙ", headFont, new Point(178, 40),
             Color.FromArgb(A(255), SpaceTheme.TextPrimary), TextFormatFlags.NoPadding);
 
-        int y = 94;
-        foreach (var entry in ChangelogEntries)
+        const int viewTop = 90;
+        const int viewBottom = 424;
+        var prevClip = g.Clip;
+        g.SetClip(new Rectangle(170, viewTop, 692, viewBottom - viewTop));
+
+        int y = 94 - _patchesScrollY;
+        foreach (var entry in _activeChangelog)
         {
             int cardH = 38 + entry.Bullets.Length * 21 + 10;
-            var cardRect = new Rectangle(180, y, 660, cardH);
-
-            using (var cardPath = SpaceTheme.CreateRoundedRect(cardRect, 8))
-            using (var cardFill = new SolidBrush(Color.FromArgb(A(235), 20, 24, 34)))
-            using (var cardPen = new Pen(Color.FromArgb(A(220), SpaceTheme.BorderSubtle), 1f))
+            if (y + cardH >= viewTop && y <= viewBottom)
             {
-                g.FillPath(cardFill, cardPath);
-                g.DrawPath(cardPen, cardPath);
+                var cardRect = new Rectangle(180, y, 660, cardH);
+
+                using (var cardPath = SpaceTheme.CreateRoundedRect(cardRect, 8))
+                using (var cardFill = new SolidBrush(Color.FromArgb(A(235), 20, 24, 34)))
+                using (var cardPen = new Pen(Color.FromArgb(A(220), SpaceTheme.BorderSubtle), 1f))
+                {
+                    g.FillPath(cardFill, cardPath);
+                    g.DrawPath(cardPen, cardPath);
+                }
+
+                TextRenderer.DrawText(g, entry.Version, verFont, new Point(196, y + 11),
+                    Color.FromArgb(A(255), SpaceTheme.TextPrimary), TextFormatFlags.NoPadding);
+                TextRenderer.DrawText(g, entry.Date, dateFont, new Point(266, y + 13),
+                    Color.FromArgb(A(255), SpaceTheme.TextMuted), TextFormatFlags.NoPadding);
+
+                var badgeRect = new Rectangle(734, y + 11, 90, 20);
+                using (var badgePath = SpaceTheme.CreateRoundedRect(badgeRect, 5))
+                using (var badgeBg = new SolidBrush(Color.FromArgb(A(220), 30, 36, 50)))
+                {
+                    g.FillPath(badgeBg, badgePath);
+                }
+                TextRenderer.DrawText(g, entry.Badge, badgeFont, badgeRect,
+                    Color.FromArgb(A(255), entry.BadgeColor), TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+
+                int by = y + 38;
+                foreach (var b in entry.Bullets)
+                {
+                    TextRenderer.DrawText(g, "•  " + b, bodyFont, new Rectangle(198, by, 626, 20),
+                        Color.FromArgb(A(255), SpaceTheme.TextSecondary), TextFormatFlags.Left | TextFormatFlags.EndEllipsis);
+                    by += 21;
+                }
             }
-
-            TextRenderer.DrawText(g, entry.Version, verFont, new Point(196, y + 11),
-                Color.FromArgb(A(255), SpaceTheme.TextPrimary), TextFormatFlags.NoPadding);
-            TextRenderer.DrawText(g, entry.Date, dateFont, new Point(266, y + 13),
-                Color.FromArgb(A(255), SpaceTheme.TextMuted), TextFormatFlags.NoPadding);
-
-            var badgeRect = new Rectangle(744, y + 11, 80, 20);
-            using (var badgePath = SpaceTheme.CreateRoundedRect(badgeRect, 5))
-            using (var badgeBg = new SolidBrush(Color.FromArgb(A(220), 30, 36, 50)))
-            {
-                g.FillPath(badgeBg, badgePath);
-            }
-            TextRenderer.DrawText(g, entry.Badge, badgeFont, badgeRect,
-                Color.FromArgb(A(255), entry.BadgeColor), TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
-
-            int by = y + 38;
-            foreach (var b in entry.Bullets)
-            {
-                TextRenderer.DrawText(g, "•  " + b, bodyFont, new Rectangle(198, by, 626, 20),
-                    Color.FromArgb(A(255), SpaceTheme.TextSecondary), TextFormatFlags.Left | TextFormatFlags.EndEllipsis);
-                by += 21;
-            }
-
             y += cardH + 10;
+        }
+
+        g.Clip = prevClip;
+
+        // Subtle scrollbar indicator when changelog overflows the viewport
+        int maxScroll = GetPatchesMaxScroll();
+        if (maxScroll > 0)
+        {
+            const int trackX = 848;
+            const int trackY = 94;
+            const int trackH = 324;
+            using var trackBg = new SolidBrush(Color.FromArgb(A(70), 255, 255, 255));
+            g.FillRectangle(trackBg, trackX, trackY, 4, trackH);
+
+            int thumbH = Math.Max(36, (int)(trackH * (trackH / (float)(trackH + maxScroll))));
+            int thumbY = trackY + (int)((trackH - thumbH) * (_patchesScrollY / (float)maxScroll));
+            using var thumbBrush = new SolidBrush(Color.FromArgb(A(210), SpaceTheme.AccentRedBright));
+            g.FillRectangle(thumbBrush, trackX, thumbY, 4, thumbH);
         }
     }
 
@@ -1297,6 +1403,7 @@ public sealed class LauncherForm : Form, IBackdropProvider
         {
             AppendLog($"[Updater] Проверка манифеста: {_settings.ManifestUrl}");
             var manifest = await UpdaterService.FetchManifestAsync(_settings.ManifestUrl, _updateCts.Token);
+            MergeRemotePatchNotes(manifest.PatchNotes);
 
             if (!_settings.UseLocalServer && !string.IsNullOrWhiteSpace(manifest.ServerHost))
             {

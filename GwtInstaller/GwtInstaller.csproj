@@ -9,7 +9,7 @@
     <ApplicationIcon>..\..\Ground War Tanks\GameIcon.ico</ApplicationIcon>
     <AssemblyName>GWT_Setup</AssemblyName>
     <RootNamespace>GwtInstaller</RootNamespace>
-    <Version>1.4.1</Version>
+    <Version>1.5.0</Version>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>

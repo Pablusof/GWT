@@ -42,6 +42,27 @@ public sealed class GameManifest
 
     [JsonPropertyName("files")]
     public List<ManifestFileEntry> Files { get; set; } = new();
+
+    [JsonPropertyName("patchNotes")]
+    public List<ManifestPatchNote>? PatchNotes { get; set; }
+}
+
+public sealed class ManifestPatchNote
+{
+    [JsonPropertyName("version")]
+    public string Version { get; set; } = string.Empty;
+
+    [JsonPropertyName("date")]
+    public string Date { get; set; } = string.Empty;
+
+    [JsonPropertyName("badge")]
+    public string Badge { get; set; } = "ПАТЧ";
+
+    [JsonPropertyName("color")]
+    public string? Color { get; set; }
+
+    [JsonPropertyName("bullets")]
+    public List<string> Bullets { get; set; } = new();
 }
 
 public sealed class ManifestPackage
