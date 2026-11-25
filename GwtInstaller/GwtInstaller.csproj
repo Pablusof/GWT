@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <ApplicationIcon>..\..\Ground War Tanks\GameIcon.ico</ApplicationIcon>
+    <AssemblyName>GWT_Setup</AssemblyName>
+    <RootNamespace>GwtInstaller</RootNamespace>
+    <Version>1.4.1</Version>
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\GwtLauncher\SpaceTheme.cs" Link="SpaceTheme.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\releases\v1.0.0\GWT_Launcher_Player.exe" LogicalName="GwtInstaller.Payload.GWT_Launcher_Player.exe" />
+    <EmbeddedResource Include="..\..\releases\v1.0.0\launcher_config.json" LogicalName="GwtInstaller.Payload.launcher_config.json" />
+    <EmbeddedResource Include="..\..\Ground War Tanks\GameIcon.ico" LogicalName="GwtInstaller.Payload.GameIcon.ico" />
+    <EmbeddedResource Include="..\GwtLauncher\Assets\hero_banner.jpg" LogicalName="GwtInstaller.Payload.hero_banner.jpg" />
+  </ItemGroup>
+
+</Project>
