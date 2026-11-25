@@ -114,6 +114,7 @@ public sealed class LauncherSettings
     public int AssetPort { get; set; } = 18081;
     public bool UseLocalServer { get; set; } = true;
     public string AccountId { get; set; } = string.Empty;
+    public string Nickname { get; set; } = string.Empty;
     public bool AutoStopServer { get; set; } = true;
     public bool MinimizeOnStart { get; set; } = false;
     public bool RotateShowcase { get; set; } = true;
@@ -211,11 +212,27 @@ public sealed class LauncherSettings
             s.AccountId = detectedLocalGameDir != null && s.UseLocalServer
                 ? "12345"
                 : Random.Shared.Next(100_000, 9_999_999).ToString();
+        }
+
+        s.Nickname = SanitizeNickname(s.Nickname);
+        if (string.IsNullOrWhiteSpace(s.Nickname))
+        {
+            s.Nickname = $"Player_{s.AccountId}";
             s.Save();
         }
 
         s.RotateShowcase = true;
         return s;
+    }
+
+    public static string SanitizeNickname(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return string.Empty;
+        var chars = raw.Trim()
+            .Where(c => !char.IsControl(c) && c != '&' && c != '=' && c != '?' && c != '"' && c != '<' && c != '>' && c != '/')
+            .ToArray();
+        var clean = new string(chars).Trim();
+        return clean.Length > 18 ? clean[..18] : clean;
     }
 
     public void Save()

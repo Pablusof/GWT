@@ -603,6 +603,7 @@ public static class UpdaterService
         string batPath = Path.Combine(Path.GetTempPath(), $"gwt_launcher_update_{Environment.ProcessId}.cmd");
         string script = $"""
             @echo off
+            chcp 65001 > nul
             timeout /t 1 /nobreak > nul
             :retry
             move /y "{stagedExe}" "{currentExe}" > nul 2>&1
@@ -613,7 +614,7 @@ public static class UpdaterService
             start "" "{currentExe}"
             del "%~f0"
             """;
-        File.WriteAllText(batPath, script, Encoding.Default);
+        File.WriteAllText(batPath, script, new UTF8Encoding(false));
 
         Process.Start(new ProcessStartInfo
         {
@@ -622,6 +623,49 @@ public static class UpdaterService
             CreateNoWindow = true,
             UseShellExecute = false,
         });
+    }
+
+    public static async Task<(bool ok, string message)> SyncNicknameAsync(
+        string host, int authPort, string persId, string nickname, CancellationToken ct)
+    {
+        try
+        {
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeoutCts.CancelAfter(TimeSpan.FromMilliseconds(1600));
+            string url =
+                $"http://{host.Trim()}:{authPort}/TK/set_nick?persId={Uri.EscapeDataString(persId.Trim())}&nick={Uri.EscapeDataString(nickname.Trim())}";
+            using var resp = await Http.GetAsync(url, timeoutCts.Token);
+            string body = (await resp.Content.ReadAsStringAsync(timeoutCts.Token)).Trim();
+            if (body.StartsWith("OK:", StringComparison.OrdinalIgnoreCase))
+                return (true, body[3..].Trim());
+            if (body.StartsWith("ERR:", StringComparison.OrdinalIgnoreCase))
+                return (false, body[4..].Trim());
+            return (resp.IsSuccessStatusCode, body);
+        }
+        catch (Exception ex)
+        {
+            return (false, ex.Message);
+        }
+    }
+
+    public static async Task<string> AdminRequestAsync(
+        string host, int authPort, string cmd, string? playerName = null,
+        Dictionary<string, string>? extraParams = null, CancellationToken ct = default)
+    {
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(10));
+        var sb = new StringBuilder($"http://{host.Trim()}:{authPort}/admin?cmd={Uri.EscapeDataString(cmd)}");
+        if (!string.IsNullOrWhiteSpace(playerName))
+            sb.Append("&player=").Append(Uri.EscapeDataString(playerName.Trim()));
+        if (extraParams != null)
+        {
+            foreach (var kv in extraParams)
+            {
+                sb.Append('&').Append(Uri.EscapeDataString(kv.Key)).Append('=').Append(Uri.EscapeDataString(kv.Value));
+            }
+        }
+        using var resp = await Http.GetAsync(sb.ToString(), timeoutCts.Token);
+        return await resp.Content.ReadAsStringAsync(timeoutCts.Token);
     }
 
     private static string ResolveBaseUrl(GameManifest manifest, string manifestUrl)

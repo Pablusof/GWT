@@ -6044,6 +6044,40 @@ public class HallServer : GameServer
         Console.WriteLine($"[HS] Corps level upgrade: {corps.CorpsName} -> Lvl {newLevel}");
     }
 
+    public bool IsPlayerOnline(long playerGuid) =>
+        _hallByGuid.TryGetValue(playerGuid, out var s) && s.IsConnected;
+
+    public void NotifyAdminResourcesUpdated(long playerGuid)
+    {
+        try
+        {
+            if (_hallByGuid.TryGetValue(playerGuid, out var s) && s.IsConnected)
+                SendMoneyExpByGuid(s, playerGuid);
+        }
+        catch { }
+    }
+
+    public void NotifyAdminTankAdded(long playerGuid, int vehicleId)
+    {
+        try
+        {
+            if (!_hallByGuid.TryGetValue(playerGuid, out var s) || !s.IsConnected) return;
+            var tank = _tankRepo.GetPlayerTanks(playerGuid).FirstOrDefault(t => t.VehicleId == vehicleId);
+            if (tank != null) SendAddedTank(s, tank);
+        }
+        catch { }
+    }
+
+    public void NotifyAdminInventoryUpdated(long playerGuid, byte itemType, int itemId)
+    {
+        try
+        {
+            if (_hallByGuid.TryGetValue(playerGuid, out var s) && s.IsConnected)
+                SendInventoryUpdate(s, playerGuid, itemType, itemId);
+        }
+        catch { }
+    }
+
     protected override void OnClientDisconnected(GameSession session)
     {
         _friendRepo.SetOnlineStatus(session.PlayerGUID, false);

@@ -59,17 +59,115 @@ public class AccountRepository
     public Account? FindByPlayerName(string playerName)
     {
         using var cmd = _db.Connection.CreateCommand();
-        // Match on PlayerName (display name). If not found, try first account (single-player).
-        cmd.CommandText = "SELECT * FROM Accounts WHERE PlayerName = @name LIMIT 1";
-        cmd.Parameters.AddWithValue("@name", playerName);
-        using var reader = cmd.ExecuteReader();
-        if (reader.Read()) return MapAccount(reader);
-        reader.Close();
-        // Fallback: return the first account in the database
-        cmd.CommandText = "SELECT * FROM Accounts LIMIT 1";
-        cmd.Parameters.Clear();
+        if (!string.IsNullOrWhiteSpace(playerName))
+        {
+            var trimmed = playerName.Trim();
+            cmd.CommandText = "SELECT * FROM Accounts WHERE LOWER(PlayerName) = LOWER(@name) OR LOWER(Username) = LOWER(@name) LIMIT 1";
+            cmd.Parameters.AddWithValue("@name", trimmed);
+            using var reader = cmd.ExecuteReader();
+            return reader.Read() ? MapAccount(reader) : null;
+        }
+
+        // Empty query fallback only: return first account
+        cmd.CommandText = "SELECT * FROM Accounts ORDER BY LastLogin DESC LIMIT 1";
         using var r2 = cmd.ExecuteReader();
         return r2.Read() ? MapAccount(r2) : null;
+    }
+
+    public List<Account> GetAllAccounts()
+    {
+        var list = new List<Account>();
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = "SELECT * FROM Accounts ORDER BY LastLogin DESC";
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read()) list.Add(MapAccount(reader));
+        return list;
+    }
+
+    public string? GetNicknameByPersId(string persId)
+    {
+        if (string.IsNullOrWhiteSpace(persId)) return null;
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = "SELECT PlayerName FROM PlayerAliases WHERE PersId = @persId LIMIT 1";
+        cmd.Parameters.AddWithValue("@persId", persId.Trim());
+        var res = cmd.ExecuteScalar();
+        return res == null || res == DBNull.Value ? null : res.ToString();
+    }
+
+    public static string SanitizeCustomNickname(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return string.Empty;
+        var chars = raw.Trim()
+            .Where(c => !char.IsControl(c) && c != '&' && c != '=' && c != '?' && c != '"' && c != '<' && c != '>' && c != '/')
+            .ToArray();
+        var s = new string(chars).Trim();
+        return s.Length > 18 ? s[..18] : s;
+    }
+
+    public bool SetNicknameForPersId(string persId, string requestedNick, out string error)
+    {
+        error = string.Empty;
+        string cleanPersId = (persId ?? string.Empty).Trim();
+        if (string.IsNullOrEmpty(cleanPersId))
+        {
+            error = "Пустой AccountId";
+            return false;
+        }
+
+        string cleanNick = SanitizeCustomNickname(requestedNick);
+        if (cleanNick.Length < 2)
+        {
+            error = "Никнейм должен содержать минимум 2 символа";
+            return false;
+        }
+
+        string? prevNick = GetNicknameByPersId(cleanPersId);
+        string defaultUsername = "Player_" + cleanPersId;
+
+        Account? existingForThisPers =
+            (!string.IsNullOrWhiteSpace(prevNick) ? GetByUsername(prevNick) ?? FindByPlayerName(prevNick) : null)
+            ?? GetByUsername(defaultUsername)
+            ?? FindByPlayerName(defaultUsername);
+
+        // Ensure target nick is not owned by a DIFFERENT account
+        var ownerOfTargetNick = FindByPlayerName(cleanNick);
+        if (ownerOfTargetNick != null &&
+            (existingForThisPers == null || ownerOfTargetNick.PlayerGUID != existingForThisPers.PlayerGUID))
+        {
+            // Also check if an unlogged PlayerAlias reserved it for a different persId
+            error = $"Ник «{cleanNick}» уже занят другим игроком";
+            return false;
+        }
+
+        using var checkAlias = _db.Connection.CreateCommand();
+        checkAlias.CommandText = "SELECT PersId FROM PlayerAliases WHERE LOWER(PlayerName) = LOWER(@n) AND PersId <> @p LIMIT 1";
+        checkAlias.Parameters.AddWithValue("@n", cleanNick);
+        checkAlias.Parameters.AddWithValue("@p", cleanPersId);
+        if (checkAlias.ExecuteScalar() != null)
+        {
+            error = $"Ник «{cleanNick}» уже занят другим игроком";
+            return false;
+        }
+
+        if (existingForThisPers != null)
+        {
+            using var upd = _db.Connection.CreateCommand();
+            upd.CommandText = "UPDATE Accounts SET Username = @n, PlayerName = @n WHERE PlayerGUID = @guid";
+            upd.Parameters.AddWithValue("@n", cleanNick);
+            upd.Parameters.AddWithValue("@guid", existingForThisPers.PlayerGUID);
+            upd.ExecuteNonQuery();
+        }
+
+        using var upsert = _db.Connection.CreateCommand();
+        upsert.CommandText = @"
+            INSERT INTO PlayerAliases (PersId, PlayerName, UpdatedAt)
+            VALUES (@p, @n, CURRENT_TIMESTAMP)
+            ON CONFLICT(PersId) DO UPDATE SET PlayerName = excluded.PlayerName, UpdatedAt = CURRENT_TIMESTAMP";
+        upsert.Parameters.AddWithValue("@p", cleanPersId);
+        upsert.Parameters.AddWithValue("@n", cleanNick);
+        upsert.ExecuteNonQuery();
+
+        return true;
     }
 
     public Account? GetByPlayerGUID(long playerGuid)

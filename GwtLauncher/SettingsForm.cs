@@ -30,6 +30,7 @@ public sealed class SettingsForm : Form
             AssetPort = current.AssetPort,
             UseLocalServer = current.UseLocalServer,
             AccountId = current.AccountId,
+            Nickname = current.Nickname,
             AutoStopServer = current.AutoStopServer,
             MinimizeOnStart = current.MinimizeOnStart,
             RotateShowcase = current.RotateShowcase,

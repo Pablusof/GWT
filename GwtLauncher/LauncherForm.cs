@@ -52,22 +52,21 @@ public sealed class LauncherForm : Form, IBackdropProvider
     private sealed record ChangelogEntry(string Version, string Date, string Badge, Color BadgeColor, string[] Bullets);
     private static readonly ChangelogEntry[] ChangelogEntries =
     {
-        new("v1.3.0", "25 ноября 2026", "ЛАУНЧЕР", SpaceTheme.AccentRedBright, new[]
+        new("v1.4.0", "25 ноября 2026", "ГЕЙМПЛЕЙ", SpaceTheme.AccentRedBright, new[]
+        {
+            "Добавлена смена игрового никнейма в лаунчере с сохранением всех танков и прогресса.",
+            "Добавлена чит-панель хоста (выдача любых танков, золота, серебра, опыта, према, расходников по нику).",
+            "Снижена вероятность взрыва боеукладки, повреждения модулей и сбития гусениц в бою.",
+        }),
+        new("v1.3.0", "25 ноября 2026", "ЛАУНЧЕР", SpaceTheme.AccentCyan, new[]
         {
             "Новый полноэкранный Space-интерфейс в стиле SpaceRust с плавающим HUD и выдвижными настройками.",
             "Добавлены живые анимации фона (параллакс, лучи заката, искры) и сдвоенная кнопка запуска.",
-            "Добавлен встроенный список изменений и диагностический журнал операций.",
         }),
-        new("v1.2.0", "24 ноября 2026", "ГЕЙМПЛЕЙ", SpaceTheme.AccentCyan, new[]
+        new("v1.2.0", "24 ноября 2026", "БОЙ", SpaceTheme.AccentGreen, new[]
         {
-            "Полностью реализована работа всех 162 модулей оборудования, 14 расходников и дымовых гранат в бою.",
-            "Исправлены покупка, установка, снятие и автопополнение боекомплекта и расходников в ангаре.",
-            "Улучшен баланс начисления бонусов, ремонта техники и переподключения игроков.",
-        }),
-        new("v1.1.0", "22 ноября 2026", "СЕТЬ", SpaceTheme.AccentGreen, new[]
-        {
-            "Подбор команды показывает и собирает реальных игроков на одну карту без подмены ботами.",
-            "Исправлены случайные разрывы соединения у клиентов при игре через Radmin VPN.",
+            "Полная поддержка 162 модулей оборудования, 14 расходников, дымовых гранат и подбора игроков.",
+            "Исправлены покупка, установка, ремонт и автопополнение в ангаре.",
         }),
     };
 
@@ -144,11 +143,13 @@ public sealed class LauncherForm : Form, IBackdropProvider
     private readonly NumericUpDown _setGamePortNum;
     private readonly NumericUpDown _setAuthPortNum;
     private readonly NumericUpDown _setAssetPortNum;
+    private readonly TextBox _setNicknameBox;
     private readonly TextBox _setAccountIdBox;
     private readonly SpaceToggle _minimizeOnStartCheck;
     private readonly SpaceToggle _autoStopServerCheck;
     private readonly TextBox _setGameDirBox;
     private readonly TextBox _setManifestUrlBox;
+    private readonly SpaceButton _setCheatPanelBtn;
     private readonly SpaceButton _setSaveBtn;
     private readonly SpaceButton _setVerifyBtn;
 
@@ -494,37 +495,40 @@ public sealed class LauncherForm : Form, IBackdropProvider
         _settingsDrawer.Controls.Add(_setAuthPortNum);
         _settingsDrawer.Controls.Add(_setAssetPortNum);
 
-        dy += 40;
-        _settingsDrawer.Controls.Add(MakeDrawerSectionLabel("ПРОФИЛЬ И ЗАПУСК", 22, dy));
-        dy += 20;
-        _setAccountIdBox = MakeDarkInput(_settings.AccountId, 22, dy, 240);
+        dy += 38;
+        _settingsDrawer.Controls.Add(MakeDrawerSectionLabel("ПРОФИЛЬ И НИКНЕЙМ", 22, dy));
+        dy += 18;
+        _setNicknameBox = MakeDarkInput(_settings.Nickname, 22, dy, 188);
+        _setNicknameBox.PlaceholderText = "Игровой никнейм";
+        _setAccountIdBox = MakeDarkInput(_settings.AccountId, 216, dy, 74);
         var genIdBtn = new SpaceButton
         {
-            Location = new Point(268, dy - 1),
-            Size = new Size(104, 28),
+            Location = new Point(296, dy - 1),
+            Size = new Size(76, 28),
             Text = "НОВЫЙ ID",
-            Font = new Font("Segoe UI", 8f, FontStyle.Bold),
+            Font = new Font("Segoe UI", 7.6f, FontStyle.Bold),
             BorderColor = SpaceTheme.BorderBright,
         };
         genIdBtn.Click += (_, _) => _setAccountIdBox.Text = Random.Shared.Next(100_000, 9_999_999).ToString();
+        _settingsDrawer.Controls.Add(_setNicknameBox);
         _settingsDrawer.Controls.Add(_setAccountIdBox);
         _settingsDrawer.Controls.Add(genIdBtn);
 
-        dy += 36;
+        dy += 34;
         _minimizeOnStartCheck = new SpaceToggle
         {
             Location = new Point(22, dy),
-            Size = new Size(350, 28),
+            Size = new Size(350, 26),
             Text = "Сворачивать лаунчер при запуске",
             Checked = _settings.MinimizeOnStart,
         };
         _minimizeOnStartCheck.CheckedChanged += (_, _) => { _settings.MinimizeOnStart = _minimizeOnStartCheck.Checked; _settings.Save(); };
 
-        dy += 30;
+        dy += 28;
         _autoStopServerCheck = new SpaceToggle
         {
             Location = new Point(22, dy),
-            Size = new Size(350, 28),
+            Size = new Size(350, 26),
             Text = "Останавливать локальный сервер",
             Checked = _settings.AutoStopServer,
         };
@@ -533,17 +537,17 @@ public sealed class LauncherForm : Form, IBackdropProvider
         _settingsDrawer.Controls.Add(_minimizeOnStartCheck);
         _settingsDrawer.Controls.Add(_autoStopServerCheck);
 
-        dy += 38;
+        dy += 34;
         _settingsDrawer.Controls.Add(MakeDrawerSectionLabel("ПАПКА ИГРЫ И ОБНОВЛЕНИЯ", 22, dy));
-        dy += 20;
+        dy += 18;
         _setGameDirBox = MakeDarkInput(_settings.GameDir, 22, dy, 350);
         _settingsDrawer.Controls.Add(_setGameDirBox);
 
-        dy += 32;
+        dy += 30;
         var browseDirBtn = new SpaceButton
         {
             Location = new Point(22, dy),
-            Size = new Size(172, 30),
+            Size = new Size(172, 28),
             Text = "ИЗМЕНИТЬ ПАПКУ",
             Font = new Font("Segoe UI", 8f, FontStyle.Bold),
             BorderColor = SpaceTheme.BorderBright,
@@ -556,7 +560,7 @@ public sealed class LauncherForm : Form, IBackdropProvider
         var openDirBtn = new SpaceButton
         {
             Location = new Point(200, dy),
-            Size = new Size(172, 30),
+            Size = new Size(172, 28),
             Text = "ОТКРЫТЬ ПАПКУ",
             Font = new Font("Segoe UI", 8f, FontStyle.Bold),
             BorderColor = SpaceTheme.BorderBright,
@@ -565,12 +569,29 @@ public sealed class LauncherForm : Form, IBackdropProvider
         _settingsDrawer.Controls.Add(browseDirBtn);
         _settingsDrawer.Controls.Add(openDirBtn);
 
-        dy += 38;
+        dy += 34;
         _settingsDrawer.Controls.Add(MakeDrawerFieldHint("URL манифеста (manifest.json):", 22, dy));
         dy += 18;
         _setManifestUrlBox = MakeDarkInput(_settings.ManifestUrl, 22, dy, 350);
         _setManifestUrlBox.PlaceholderText = LauncherSettings.DefaultManifestUrl;
         _settingsDrawer.Controls.Add(_setManifestUrlBox);
+
+        dy += 34;
+        _setCheatPanelBtn = new SpaceButton
+        {
+            Location = new Point(22, dy),
+            Size = new Size(350, 32),
+            Text = "ЧИТ-ПАНЕЛЬ АДМИНА (ВЫДАЧА ПО НИКУ)",
+            Font = new Font("Segoe UI", 8.2f, FontStyle.Bold),
+            BorderColor = SpaceTheme.AccentCyan,
+            Visible = CanOpenCheatPanel(),
+        };
+        _setCheatPanelBtn.Click += async (_, _) =>
+        {
+            ToggleSettingsDrawer(false);
+            await OpenCheatPanelAsync();
+        };
+        _settingsDrawer.Controls.Add(_setCheatPanelBtn);
 
         // Drawer Footer Buttons
         _setVerifyBtn = new SpaceButton
@@ -1141,9 +1162,13 @@ public sealed class LauncherForm : Form, IBackdropProvider
             if (!_showingLogInPatches) TogglePatchesConsoleView();
         };
 
+        var cheatItem = new ToolStripMenuItem("Чит-панель админа (по нику)");
+        cheatItem.Click += async (_, _) => await OpenCheatPanelAsync();
+
         menu.Items.Add(checkItem);
         menu.Items.Add(switchModeItem);
         menu.Items.Add(serverCtrlItem);
+        menu.Items.Add(cheatItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(folderItem);
         menu.Items.Add(logItem);
@@ -1151,6 +1176,7 @@ public sealed class LauncherForm : Form, IBackdropProvider
         {
             bool localUp = (_serverProcess != null && !_serverProcess.HasExited) || IsPortOpen(_settings.GamePort);
             serverCtrlItem.Visible = _settings.UseLocalServer && localUp;
+            cheatItem.Visible = CanOpenCheatPanel();
         };
         return menu;
     }
@@ -1412,6 +1438,25 @@ public sealed class LauncherForm : Form, IBackdropProvider
                 }
             }
 
+            // Sync custom nickname with AuthServer before Tank.exe starts
+            string desiredNick = LauncherSettings.SanitizeNickname(_settings.Nickname);
+            if (!string.IsNullOrWhiteSpace(desiredNick))
+            {
+                var (nickOk, nickMsg) = await UpdaterService.SyncNicknameAsync(
+                    targetHost, _settings.AuthPort, _settings.AccountId, desiredNick, CancellationToken.None);
+                if (nickOk)
+                {
+                    AppendLog($"[Launcher] Игровой ник: {nickMsg}");
+                }
+                else if (nickMsg.Contains("занят", StringComparison.OrdinalIgnoreCase))
+                {
+                    MessageBox.Show(this,
+                        $"{nickMsg}\nВыберите другой никнейм в Настройках.",
+                        "Никнейм занят", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+            }
+
             if (Directory.Exists(Path.Combine(GameDir, "showcase_level0")))
             {
                 RotateShowcase();
@@ -1424,7 +1469,7 @@ public sealed class LauncherForm : Form, IBackdropProvider
             }
 
             var args = _settings.BuildLaunchArgs();
-            AppendLog($"[Launcher] Запускаю Tank.exe -> {targetHost}:{_settings.GamePort} (Account ID={_settings.AccountId})");
+            AppendLog($"[Launcher] Запускаю Tank.exe -> {targetHost}:{_settings.GamePort} (Nick={_settings.Nickname}, ID={_settings.AccountId})");
             var psi = new ProcessStartInfo
             {
                 FileName = TankExePath,
@@ -1476,7 +1521,9 @@ public sealed class LauncherForm : Form, IBackdropProvider
         _setGamePortNum.Value = Math.Clamp(_settings.GamePort > 0 ? _settings.GamePort : 9801, 1, 65535);
         _setAuthPortNum.Value = Math.Clamp(_settings.AuthPort > 0 ? _settings.AuthPort : 18080, 1, 65535);
         _setAssetPortNum.Value = Math.Clamp(_settings.AssetPort > 0 ? _settings.AssetPort : 18081, 1, 65535);
+        _setNicknameBox.Text = _settings.Nickname;
         _setAccountIdBox.Text = _settings.AccountId;
+        _setCheatPanelBtn.Visible = CanOpenCheatPanel();
         SetDrawerMode(_settings.UseLocalServer);
     }
 
@@ -1504,20 +1551,61 @@ public sealed class LauncherForm : Form, IBackdropProvider
         _settings.AccountId = string.IsNullOrWhiteSpace(_setAccountIdBox.Text)
             ? Random.Shared.Next(100_000, 9_999_999).ToString()
             : _setAccountIdBox.Text.Trim();
+        string cleanNick = LauncherSettings.SanitizeNickname(_setNicknameBox.Text);
+        if (cleanNick.Length < 2) cleanNick = $"Player_{_settings.AccountId}";
+        _settings.Nickname = cleanNick;
         _settings.Save();
         _pendingUpdate = null;
 
         UpdatePathAndOptionsUi();
+        string host = _settings.UseLocalServer ? "127.0.0.1" : _settings.ServerHost;
+        var (nickOk, nickMsg) = await UpdaterService.SyncNicknameAsync(
+            host, _settings.AuthPort, _settings.AccountId, _settings.Nickname, CancellationToken.None);
+        if (!nickOk && nickMsg.Contains("занят", StringComparison.OrdinalIgnoreCase))
+        {
+            MessageBox.Show(this, nickMsg, "Никнейм занят", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+
         await PingRemoteServerIfNeededAsync(force: true);
         RefreshStatus();
         ToggleSettingsDrawer(false);
-        AppendLog("[Settings] Настройки сохранены.");
+        AppendLog($"[Settings] Настройки сохранены (Ник: {_settings.Nickname}).");
 
         bool manifestChanged = !string.Equals(prevManifest, _settings.ManifestUrl, StringComparison.OrdinalIgnoreCase);
         bool dirChanged = !string.Equals(prevDir, _settings.GameDir, StringComparison.OrdinalIgnoreCase);
         if ((manifestChanged || dirChanged) && !string.IsNullOrWhiteSpace(_settings.ManifestUrl))
         {
             await CheckUpdatesAsync(forceFullHash: false, promptSelfUpdate: true);
+        }
+    }
+
+    private bool CanOpenCheatPanel() =>
+        _detectedEmuDir != null || LauncherSettings.IsLocalHost(_settings.ServerHost) || IsPortOpen(_settings.AuthPort);
+
+    private async Task OpenCheatPanelAsync()
+    {
+        try
+        {
+            if (_detectedEmuDir != null && !IsPortOpen(_settings.AuthPort))
+            {
+                var ans = MessageBox.Show(this,
+                    "Сервер сейчас не запущен. Запустить локальный сервер для работы чит-панели?",
+                    "Чит-панель", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                if (ans == DialogResult.Yes)
+                {
+                    await EnsureLocalServerStartedAsync();
+                }
+            }
+
+            string adminHost = _detectedEmuDir != null || LauncherSettings.IsLocalHost(_settings.ServerHost)
+                ? "127.0.0.1"
+                : _settings.ServerHost;
+            using var dlg = new CheatPanelForm(adminHost, _settings.AuthPort, _settings.Nickname);
+            dlg.ShowDialog(this);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, $"Не удалось открыть чит-панель:\n{ex.Message}", "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
     }
 
@@ -1693,8 +1781,11 @@ public sealed class LauncherForm : Form, IBackdropProvider
 
     private void UpdatePathAndOptionsUi()
     {
-        _profileNameLabel.Text = $"Player_{_settings.AccountId}";
+        _profileNameLabel.Text = string.IsNullOrWhiteSpace(_settings.Nickname)
+            ? $"Player_{_settings.AccountId}"
+            : _settings.Nickname;
         _autoStopServerCheck.Visible = _settings.UseLocalServer;
+        _setCheatPanelBtn.Visible = CanOpenCheatPanel();
     }
 
     private async Task PollTickAsync()

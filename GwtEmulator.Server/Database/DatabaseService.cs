@@ -265,6 +265,12 @@ public class DatabaseService : IDisposable
                 FOREIGN KEY (TankGuid) REFERENCES Tanks(TankGUID)
             );
 
+            CREATE TABLE IF NOT EXISTS PlayerAliases (
+                PersId TEXT PRIMARY KEY,
+                PlayerName TEXT NOT NULL,
+                UpdatedAt TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+
             CREATE INDEX IF NOT EXISTS idx_tanks_player ON Tanks(PlayerGUID);
             CREATE INDEX IF NOT EXISTS idx_inventory_player ON Inventory(PlayerGUID);
             CREATE INDEX IF NOT EXISTS idx_tank_equipment_tank ON TankEquipment(TankGuid);

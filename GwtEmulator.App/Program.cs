@@ -92,11 +92,13 @@ class Program
         var roomServer = new RoomServer(9601, database, tankRepo, battleStatsRepo, gameTables, accountRepo, crewRepo, tankEquipmentRepo, modeStatsRepo);
         var authServer = new AuthServer(18080);
 
-        // Wire admin panel repos so /admin endpoint can give resources and tanks
-        authServer.AdminAccountRepo = accountRepo;
-        authServer.AdminTankRepo    = tankRepo;
-        authServer.AdminCorpsRepo   = corpsRepo;
-        authServer.AdminGameTables  = gameTables;
+        // Wire admin panel repos so /admin & /panel endpoints can manage resources, tanks, inventory and live hangar updates
+        authServer.AdminAccountRepo   = accountRepo;
+        authServer.AdminTankRepo      = tankRepo;
+        authServer.AdminCorpsRepo     = corpsRepo;
+        authServer.AdminInventoryRepo = inventoryRepo;
+        authServer.AdminGameTables    = gameTables;
+        authServer.AdminHallServer    = hallServer;
 
         // AssetBundles path: read from asset_root.txt (written by setup.ps1 next to
         // itself, i.e. the repo root). Check a few plausible locations since build
