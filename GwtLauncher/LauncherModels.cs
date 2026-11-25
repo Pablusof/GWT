@@ -116,7 +116,7 @@ public sealed class LauncherSettings
     public string AccountId { get; set; } = string.Empty;
     public bool AutoStopServer { get; set; } = true;
     public bool MinimizeOnStart { get; set; } = false;
-    public bool RotateShowcase { get; set; } = false;
+    public bool RotateShowcase { get; set; } = true;
 
     public static string CurrentLauncherVersion
     {
@@ -214,6 +214,7 @@ public sealed class LauncherSettings
             s.Save();
         }
 
+        s.RotateShowcase = true;
         return s;
     }
 

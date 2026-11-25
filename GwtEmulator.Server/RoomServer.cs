@@ -6572,7 +6572,7 @@ public class RoomServer : GameServer
             else if (comp == 3) hitRightTrack = true;                     // RightChassis
         }
         bool hitTrack = hitLeftTrack || hitRightTrack;
-        if (hitTrack)
+        if (hitTrack && _random.Next(100) < 35)
             DamageTrackSide(attacker.Room, attacker, target, hitRightTrack && !hitLeftTrack, sendShooterTip: false);
 
         ResolveHit(attacker.Room, attacker, target,
@@ -6842,15 +6842,19 @@ public class RoomServer : GameServer
     {
         EnsureModuleHp(target);
         bool sideRear   = absFace >= 60f;
-        // Борт/корма корпуса — самые уязвимые; лоб — редко; в башне только БК (кормовая укладка).
-        int  rackChance = (int)MathF.Round((hitTurret ? (sideRear ? 15 : 5) : (sideRear ? 28 : 10)) * target.AmmoBayNoDmgMult);
-        int  fuelChance = (int)MathF.Round((hitTurret ? 0 : (sideRear ? 22 : 7)) * target.FuelTankNoDmgMult);
-        float moduleDmg = damage * (0.6f + (float)_random.NextDouble() * 0.4f);
+        // Сниженные шансы и урон по модулям: первый пробой не взрывает целый БК/бак с одного выстрела.
+        int  rackChance = (int)MathF.Round((hitTurret ? (sideRear ? 4 : 1) : (sideRear ? 7 : 2)) * target.AmmoBayNoDmgMult);
+        int  fuelChance = (int)MathF.Round((hitTurret ? 0 : (sideRear ? 6 : 2)) * target.FuelTankNoDmgMult);
+        float moduleDmg = damage * (0.25f + (float)_random.NextDouble() * 0.15f);
 
         // Не больше одного модуля за попадание: сперва бросок по БК, затем по баку.
         if (target.AmmoRackState != 2 && _random.Next(100) < rackChance)
         {
+            bool wasHealthy = target.AmmoRackState == 0;
             target.AmmoRackHp -= moduleDmg;
+            if (wasHealthy && target.AmmoRackHp <= 0f)
+                target.AmmoRackHp = MathF.Max(1f, target.AmmoRackMaxHp * 0.25f);
+
             if (target.AmmoRackHp <= 0f)
             {
                 target.AmmoRackState = 2;
@@ -6870,7 +6874,11 @@ public class RoomServer : GameServer
         }
         if (target.FuelTankState != 2 && _random.Next(100) < fuelChance)
         {
+            bool wasHealthy = target.FuelTankState == 0;
             target.FuelTankHp -= moduleDmg;
+            if (wasHealthy && target.FuelTankHp <= 0f)
+                target.FuelTankHp = MathF.Max(1f, target.FuelTankMaxHp * 0.25f);
+
             if (target.FuelTankHp <= 0f)
             {
                 // Gold Extinguisher (id=4): auto-extinguish fire if unused slot equipped
@@ -7233,7 +7241,7 @@ public class RoomServer : GameServer
             // Шанс держим умеренным: точка попадания у ботов всегда «низкая»
             // (центр цели + 0.5 м), поэтому без броска гусеница рвалась бы с каждого
             // выстрела. 35% сбоку, 12% с лобовых ракурсов — как в оригинале.
-            if (lowHit && _random.Next(100) < (sideHit ? 35 : 12))
+            if (lowHit && _random.Next(100) < (sideHit ? 14 : 5))
             {
                 // сторона: слева/справа от корпуса цели по знаку бокового смещения
                 float relRadTr = MathF.Atan2(attacker.PosX - target.PosX,

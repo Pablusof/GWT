@@ -9,12 +9,16 @@
     <ApplicationIcon>..\..\Ground War Tanks\GameIcon.ico</ApplicationIcon>
     <AssemblyName>GWT_Launcher</AssemblyName>
     <RootNamespace>GwtLauncher</RootNamespace>
-    <Version>1.2.0</Version>
+    <Version>1.3.0</Version>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
   </PropertyGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Assets\hero_banner.jpg" />
+  </ItemGroup>
 
 </Project>

@@ -40,29 +40,28 @@ public sealed class SettingsForm : Form
         MaximizeBox = false;
         MinimizeBox = false;
         StartPosition = FormStartPosition.CenterParent;
-        ClientSize = new Size(560, 415);
-        BackColor = Color.FromArgb(24, 27, 32);
-        ForeColor = Color.FromArgb(232, 236, 242);
+        ClientSize = new Size(576, 430);
+        BackColor = SpaceTheme.BgWindow;
+        ForeColor = SpaceTheme.TextPrimary;
         Font = new Font("Segoe UI", 9.5f);
 
         var root = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            Padding = new Padding(16),
+            Padding = new Padding(18),
             ColumnCount = 1,
             RowCount = 10,
-            BackColor = BackColor,
+            BackColor = SpaceTheme.BgWindow,
         };
         for (int i = 0; i < 9; i++) root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
 
-        // 1. Папка игры
         root.Controls.Add(MakeLabel("Папка установки игры:"), 0, 0);
-        var dirRow = new TableLayoutPanel { Dock = DockStyle.Top, Height = 30, ColumnCount = 2, Margin = new Padding(0, 2, 0, 10) };
+        var dirRow = new TableLayoutPanel { Dock = DockStyle.Top, Height = 32, ColumnCount = 2, Margin = new Padding(0, 2, 0, 10), BackColor = SpaceTheme.BgWindow };
         dirRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
         dirRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         _gameDirBox = MakeTextBox(current.GameDir);
-        var browseBtn = MakeButton("Обзор...", Color.FromArgb(56, 62, 74), 90);
+        var browseBtn = MakeSpaceButton("Обзор...", SpaceTheme.BgCardHover, SpaceTheme.BgCard, SpaceTheme.BorderBright, 96);
         browseBtn.Click += (_, _) =>
         {
             using var dlg = new FolderBrowserDialog
@@ -71,30 +70,26 @@ public sealed class SettingsForm : Form
                 SelectedPath = _gameDirBox.Text,
             };
             if (dlg.ShowDialog(this) == DialogResult.OK)
-            {
                 _gameDirBox.Text = dlg.SelectedPath;
-            }
         };
         dirRow.Controls.Add(_gameDirBox, 0, 0);
         dirRow.Controls.Add(browseBtn, 1, 0);
         root.Controls.Add(dirRow, 0, 1);
 
-        // 2. URL манифеста
         root.Controls.Add(MakeLabel("URL манифеста обновлений (manifest.json):"), 0, 2);
         _manifestUrlBox = MakeTextBox(current.ManifestUrl);
         _manifestUrlBox.PlaceholderText = "https://example.com/gwt/manifest.json";
         _manifestUrlBox.Margin = new Padding(0, 2, 0, 10);
         root.Controls.Add(_manifestUrlBox, 0, 3);
 
-        // 3. Режим сервера (Онлайн Вариант А vs Локальный)
         root.Controls.Add(MakeLabel("Режим подключения к серверу:"), 0, 4);
-        var modeFlow = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, Margin = new Padding(0, 2, 0, 8) };
+        var modeFlow = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, Margin = new Padding(0, 2, 0, 8), BackColor = SpaceTheme.BgWindow };
         _onlineModeRadio = new RadioButton
         {
             AutoSize = true,
-            Text = "Онлайн-сервер (Вариант A)",
+            Text = "Онлайн / Radmin VPN",
             Checked = !current.UseLocalServer,
-            ForeColor = ForeColor,
+            ForeColor = SpaceTheme.TextPrimary,
             Margin = new Padding(0, 0, 18, 0),
         };
         _localModeRadio = new RadioButton
@@ -103,20 +98,19 @@ public sealed class SettingsForm : Form
             Text = localEmulatorAvailable ? "Локальный сервер на этом ПК" : "Локальный сервер (не найден рядом)",
             Checked = current.UseLocalServer,
             Enabled = localEmulatorAvailable || current.UseLocalServer,
-            ForeColor = ForeColor,
+            ForeColor = SpaceTheme.TextPrimary,
         };
         _onlineModeRadio.CheckedChanged += (_, _) => UpdateServerHostEnabled();
         modeFlow.Controls.Add(_onlineModeRadio);
         modeFlow.Controls.Add(_localModeRadio);
         root.Controls.Add(modeFlow, 0, 5);
 
-        // 4. Адрес сервера и порты
         root.Controls.Add(MakeLabel("Адрес игрового сервера (IP / домен) и порты (Login / Auth / Asset):"), 0, 6);
-        var netRow = new TableLayoutPanel { Dock = DockStyle.Top, Height = 32, ColumnCount = 4, Margin = new Padding(0, 2, 0, 10) };
+        var netRow = new TableLayoutPanel { Dock = DockStyle.Top, Height = 32, ColumnCount = 4, Margin = new Padding(0, 2, 0, 10), BackColor = SpaceTheme.BgWindow };
         netRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
-        netRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 76));
-        netRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 76));
-        netRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 76));
+        netRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 78));
+        netRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 78));
+        netRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 78));
         _serverHostBox = MakeTextBox(current.ServerHost);
         _gamePortNum = MakePortBox(current.GamePort, 9801);
         _authPortNum = MakePortBox(current.AuthPort, 18080);
@@ -127,30 +121,32 @@ public sealed class SettingsForm : Form
         netRow.Controls.Add(_assetPortNum, 3, 0);
         root.Controls.Add(netRow, 0, 7);
 
-        // 5. ID аккаунта
         root.Controls.Add(MakeLabel("ID аккаунта (используется для входа на сервер как Player_<ID>):"), 0, 8);
-        var accRow = new TableLayoutPanel { Dock = DockStyle.Top, Height = 30, ColumnCount = 2, Margin = new Padding(0, 2, 0, 10) };
+        var accRow = new TableLayoutPanel { Dock = DockStyle.Top, Height = 32, ColumnCount = 2, Margin = new Padding(0, 2, 0, 10), BackColor = SpaceTheme.BgWindow };
         accRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
         accRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         _accountIdBox = MakeTextBox(current.AccountId);
-        var genIdBtn = MakeButton("Новый ID", Color.FromArgb(56, 62, 74), 90);
+        var genIdBtn = MakeSpaceButton("Новый ID", SpaceTheme.BgCardHover, SpaceTheme.BgCard, SpaceTheme.BorderBright, 96);
         genIdBtn.Click += (_, _) => _accountIdBox.Text = Random.Shared.Next(100_000, 9_999_999).ToString();
         accRow.Controls.Add(_accountIdBox, 0, 0);
         accRow.Controls.Add(genIdBtn, 1, 0);
         root.Controls.Add(accRow, 0, 9);
 
-        // 6. Кнопки OK / Отмена
-        var footer = new FlowLayoutPanel
+        var footer = new Panel
         {
             Dock = DockStyle.Bottom,
-            FlowDirection = FlowDirection.RightToLeft,
-            Height = 46,
-            Padding = new Padding(16, 6, 16, 8),
-            BackColor = Color.FromArgb(30, 34, 40),
+            Height = 54,
+            Padding = new Padding(18, 9, 18, 9),
+            BackColor = SpaceTheme.BgCard,
         };
-        var cancelBtn = MakeButton("Отмена", Color.FromArgb(62, 68, 79), 96);
-        cancelBtn.DialogResult = DialogResult.Cancel;
-        var saveBtn = MakeButton("Сохранить", Color.FromArgb(46, 148, 79), 110);
+        var cancelBtn = MakeSpaceButton("Отмена", SpaceTheme.BgCardHover, SpaceTheme.BgCard, SpaceTheme.BorderBright, 104);
+        cancelBtn.Dock = DockStyle.Right;
+        cancelBtn.Click += (_, _) => { DialogResult = DialogResult.Cancel; Close(); };
+
+        var spacer = new Panel { Dock = DockStyle.Right, Width = 8, BackColor = SpaceTheme.BgCard };
+
+        var saveBtn = MakeSpaceButton("Сохранить", SpaceTheme.AccentRedBright, SpaceTheme.AccentRedDark, Color.Transparent, 126);
+        saveBtn.Dock = DockStyle.Right;
         saveBtn.Click += (_, _) =>
         {
             if (string.IsNullOrWhiteSpace(_gameDirBox.Text))
@@ -173,13 +169,13 @@ public sealed class SettingsForm : Form
             DialogResult = DialogResult.OK;
             Close();
         };
-        footer.Controls.Add(cancelBtn);
+
         footer.Controls.Add(saveBtn);
+        footer.Controls.Add(spacer);
+        footer.Controls.Add(cancelBtn);
 
         Controls.Add(root);
         Controls.Add(footer);
-        AcceptButton = saveBtn;
-        CancelButton = cancelBtn;
         UpdateServerHostEnabled();
     }
 
@@ -191,25 +187,23 @@ public sealed class SettingsForm : Form
         _authPortNum.Enabled = online;
         _assetPortNum.Enabled = online;
         if (!online)
-        {
             _serverHostBox.Text = "127.0.0.1";
-        }
     }
 
-    private Label MakeLabel(string text) => new()
+    private static Label MakeLabel(string text) => new()
     {
         AutoSize = true,
         Text = text,
-        ForeColor = Color.FromArgb(186, 194, 206),
-        Margin = new Padding(0, 0, 0, 2),
+        ForeColor = SpaceTheme.TextSecondary,
+        Margin = new Padding(0, 0, 0, 3),
     };
 
     private static TextBox MakeTextBox(string value) => new()
     {
         Dock = DockStyle.Fill,
         Text = value,
-        BackColor = Color.FromArgb(35, 39, 46),
-        ForeColor = Color.FromArgb(236, 240, 245),
+        BackColor = SpaceTheme.BgInput,
+        ForeColor = SpaceTheme.TextPrimary,
         BorderStyle = BorderStyle.FixedSingle,
     };
 
@@ -219,25 +213,21 @@ public sealed class SettingsForm : Form
         Minimum = 1,
         Maximum = 65535,
         Value = Math.Clamp(val > 0 ? val : fallback, 1, 65535),
-        BackColor = Color.FromArgb(35, 39, 46),
-        ForeColor = Color.FromArgb(236, 240, 245),
+        BackColor = SpaceTheme.BgInput,
+        ForeColor = SpaceTheme.TextPrimary,
+        BorderStyle = BorderStyle.FixedSingle,
         Margin = new Padding(6, 0, 0, 0),
     };
 
-    private static Button MakeButton(string text, Color back, int width)
+    private static SpaceButton MakeSpaceButton(string text, Color c1, Color c2, Color border, int width) => new()
     {
-        var b = new Button
-        {
-            Text = text,
-            Width = width,
-            Height = 28,
-            BackColor = back,
-            ForeColor = Color.White,
-            FlatStyle = FlatStyle.Flat,
-            Cursor = Cursors.Hand,
-            Margin = new Padding(6, 0, 0, 0),
-        };
-        b.FlatAppearance.BorderSize = 0;
-        return b;
-    }
+        Text = text,
+        Width = width,
+        Height = 32,
+        GradientStart = c1,
+        GradientEnd = c2,
+        BorderColor = border,
+        CornerRadius = 6,
+        Margin = new Padding(6, 0, 0, 0),
+    };
 }
