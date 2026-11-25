@@ -20,6 +20,12 @@ namespace GwtEmulator.Server;
 
 public enum TankClass { Light = 1, Medium = 2, Heavy = 3, TD = 4 }
 
+// Tactical front corridor assigned at spawn (-1=Left flank, 0=Center, +1=Right flank).
+public enum BotFront { Left = -1, Center = 0, Right = 1 }
+
+// High-level tactical state for human-like peek/cover/brawl decisions.
+public enum BotTacticalState { AdvanceFront, PeekOut, FireHold, ReloadCover, FlankManoeuvre, Retreat }
+
 // How a bot picks WHICH spotted enemy to fight.
 public enum TargetPriority { Nearest, Weakest, HighValue }
 
@@ -138,6 +144,36 @@ public static class BotCombatProfiles
         4 => TankClass.TD,
         _ => TankClass.Medium,
     };
+
+    /// <summary>
+    /// Assigns a tactical front corridor (-1 Left, 0 Center, +1 Right) by tank class
+    /// and spawn slot so the team fans out naturally across flanks instead of blobbing.
+    /// </summary>
+    public static BotFront AssignFront(TankClass cls, int teamIndex)
+    {
+        int idx = Math.Abs(teamIndex);
+        return cls switch
+        {
+            TankClass.Heavy => (idx % 4) switch
+            {
+                0 or 1 => BotFront.Center,
+                2      => BotFront.Left,
+                _      => BotFront.Right,
+            },
+            TankClass.TD => (idx % 3) switch
+            {
+                0 => BotFront.Left,
+                1 => BotFront.Center,
+                _ => BotFront.Right,
+            },
+            _ => (idx % 5) switch // Light & Medium: predominantly flanks with occasional center support
+            {
+                0 or 2 => BotFront.Left,
+                1 or 3 => BotFront.Right,
+                _      => BotFront.Center,
+            },
+        };
+    }
 
     private static float Clamp(float v, float lo, float hi) => v < lo ? lo : (v > hi ? hi : v);
     private static float Clamp01(float v) => Clamp(v, 0f, 1f);

@@ -101,6 +101,78 @@ namespace GwtEmulator.Server
         }
 
         /// <summary>
+        /// Выбирает валидный узел графа вдоль назначенного фронта (lane: -1 левый фланг,
+        /// 0 центр, +1 правый фланг) в диапазоне прогресса [minFrac..maxFrac] от базы
+        /// своей команды к базе противника. Возвращает false, если подходящих узлов нет.
+        /// </summary>
+        public bool TryGetFrontWaypoint(
+            float ownX, float ownZ, float enemyX, float enemyZ,
+            int lane, float minFrac, float maxFrac,
+            Random rng, Func<float, float, bool> isValid,
+            out float wx, out float wz)
+        {
+            wx = 0f; wz = 0f;
+            if (_nodes.Count == 0) return false;
+
+            float fdx = enemyX - ownX, fdz = enemyZ - ownZ;
+            float span = MathF.Sqrt(fdx * fdx + fdz * fdz);
+            if (span < 10f) return false;
+            float fwdX = fdx / span, fwdZ = fdz / span;
+            float rightX = -fwdZ, rightZ = fwdX;
+
+            float minLat = float.MaxValue, maxLat = float.MinValue;
+            for (int i = 0; i < _nodes.Count; i++)
+            {
+                float lat = (_nodes[i].X - ownX) * rightX + (_nodes[i].Z - ownZ) * rightZ;
+                if (lat < minLat) minLat = lat;
+                if (lat > maxLat) maxLat = lat;
+            }
+            float midLat  = (minLat + maxLat) * 0.5f;
+            float halfLat = MathF.Max(60f, (maxLat - minLat) * 0.5f);
+
+            float targetProg = (minFrac + maxFrac) * 0.5f;
+            float targetLat  = lane * 0.58f;
+
+            var ranked = new List<(float score, float x, float z)>();
+            for (int pass = 0; pass < 2 && ranked.Count == 0; pass++)
+            {
+                float pLo = pass == 0 ? minFrac : MathF.Max(0.12f, minFrac - 0.10f);
+                float pHi = pass == 0 ? maxFrac : MathF.Min(0.92f, maxFrac + 0.10f);
+
+                for (int i = 0; i < _nodes.Count; i++)
+                {
+                    var node = _nodes[i];
+                    float exDistSq = (node.X - enemyX) * (node.X - enemyX) + (node.Z - enemyZ) * (node.Z - enemyZ);
+                    if (exDistSq < 45f * 45f) continue;
+
+                    float rx = node.X - ownX, rz = node.Z - ownZ;
+                    float prog = (rx * fwdX + rz * fwdZ) / span;
+                    if (prog < pLo || prog > pHi) continue;
+
+                    float latNorm = ((rx * rightX + rz * rightZ) - midLat) / halfLat;
+                    if (pass == 0)
+                    {
+                        if (lane < 0 && latNorm > -0.15f) continue;
+                        if (lane > 0 && latNorm <  0.15f) continue;
+                        if (lane == 0 && MathF.Abs(latNorm) > 0.35f) continue;
+                    }
+
+                    if (!isValid(node.X, node.Z)) continue;
+
+                    float score = -MathF.Abs(prog - targetProg) * 1.4f - MathF.Abs(latNorm - targetLat);
+                    ranked.Add((score, node.X, node.Z));
+                }
+            }
+
+            if (ranked.Count == 0) return false;
+            ranked.Sort((a, b) => b.score.CompareTo(a.score));
+            int pool = Math.Min(4, ranked.Count);
+            var pick = ranked[rng.Next(pool)];
+            wx = pick.x; wz = pick.z;
+            return true;
+        }
+
+        /// <summary>
         /// Следующая точка, к которой должен рулить бот, чтобы по графу двигаться к (goalX,goalZ).
         /// Возвращает false, если граф пуст. arriveDist — насколько близко к узлу считается «дошёл»
         /// (чтобы не втыкаться в узел, а идти к следующему).

@@ -1962,21 +1962,21 @@ public class RoomServer : GameServer
             ? bot.SteerSideBias
             : ((bot.PlayerGUID % 2 == 0) ? 1 : -1);
 
-        float[] mags = { 25f, 45f, 70f, 95f };
+        float[] mags = { 12f, 24f, 38f, 54f, 72f, 92f };
         foreach (float mag in mags)
         {
             float first = preferredSide * mag;
             if (ClearAt(first))
             {
                 bot.SteerSideBias = preferredSide;
-                bot.SteerSideUntil = DateTime.UtcNow.AddSeconds(1.5);
+                bot.SteerSideUntil = DateTime.UtcNow.AddSeconds(1.8);
                 return first;
             }
             float second = -preferredSide * mag;
             if (ClearAt(second))
             {
                 bot.SteerSideBias = -preferredSide;
-                bot.SteerSideUntil = DateTime.UtcNow.AddSeconds(1.5);
+                bot.SteerSideUntil = DateTime.UtcNow.AddSeconds(1.8);
                 return second;
             }
         }
@@ -2008,12 +2008,18 @@ public class RoomServer : GameServer
             }
             else
             {
-                float amt = Math.Min(overlap * scale, 1.4f);
+                float amt = Math.Min(overlap * scale, 0.42f);
                 pushX += (dx / d) * amt;
                 pushZ += (dz / d) * amt;
             }
         }
         if (pushX == 0f && pushZ == 0f) return;
+        float pushLen = MathF.Sqrt(pushX * pushX + pushZ * pushZ);
+        if (pushLen > 0.42f)
+        {
+            float s = 0.42f / pushLen;
+            pushX *= s; pushZ *= s;
+        }
         float nx = Math.Clamp(bot.PosX + pushX, cfg.XMin + 5f, cfg.XMax - 5f);
         float nz = Math.Clamp(bot.PosZ + pushZ, cfg.ZMin + 5f, cfg.ZMax - 5f);
         bool curInHazard = IsNavHazard(room, bot.PosX, bot.PosZ);
@@ -2167,7 +2173,7 @@ public class RoomServer : GameServer
     }
 
     private const float SpotRange      = 320f; // fallback view range (world units)
-    private const float ProxySpotRange = 50f;  // X-ray auto-spot through walls/hills
+    private const float ProxySpotRange = 72f;  // X-ray auto-spot through walls/hills (~65-75m)
     private const double FireRevealSec = 3.0;  // gun flash expands detection range
     private const double SpotHoldSec   = 3.5;  // linger after losing LOS/range (kills flicker)
 
@@ -2230,7 +2236,7 @@ public class RoomServer : GameServer
         float dist = Distance2D(spotter, target);
         if (dist <= ProxySpotRange) return true;
 
-        // Smoke clouds conceal targets outside proxy-spot distance (50m).
+        // Smoke clouds conceal targets outside proxy-spot distance (72m).
         if (IsConcealedBySmoke(room, target.PosX, target.PosZ, now) || IsConcealedBySmoke(room, spotter.PosX, spotter.PosZ, now))
             return false;
 
@@ -3171,6 +3177,7 @@ public class RoomServer : GameServer
             botPlayer.Room               = room;
             // Derive class-based combat profile + vision from this tank's real stats.
             botPlayer.Profile     = BotCombatProfiles.Build(botTankEntry, _gameTables);
+            botPlayer.Front       = BotCombatProfiles.AssignFront(botPlayer.Profile.Class, teamIdx);
             botPlayer.Skill       = BotSkill.Roll(_random);
             botPlayer.DetectRange = botPlayer.Profile.DetectRange * BotSkill.ViewMult(botPlayer.Skill);
             try
@@ -3344,7 +3351,7 @@ public class RoomServer : GameServer
             RotY = p.IsBot ? p.LastYaw     : p.RotY,
             RotZ = p.IsBot ? p.RenderRoll  : p.RotZ,
             GunAngle    = 0f,
-            TurretAngle = p.TowerRotY,
+            TurretAngle = p.IsBot ? p.CurrentTurretAngle : p.TowerRotY,
             CruiseGrade = 0,
             SlideSpeedX = 0, SlideSpeedY = 0, SlideSpeedZ = 0,
         };
@@ -4160,6 +4167,7 @@ public class RoomServer : GameServer
         bot.CurrentShellId     = _gameTables.GetGun(bot.MainGunID)?.Ammo1Id ?? 0;
         // Class-based combat profile + vision from this tank's real stats.
         bot.Profile     = BotCombatProfiles.Build(entry, _gameTables);
+        bot.Front       = ((int)(Math.Abs(guid) % 3) - 1) switch { -1 => BotFront.Left, 0 => BotFront.Center, _ => BotFront.Right };
         bot.Skill       = BotSkill.Roll(_random);
         bot.DetectRange = bot.Profile.DetectRange * BotSkill.ViewMult(bot.Skill);
         try
@@ -4239,6 +4247,8 @@ public class RoomServer : GameServer
             CurrentShellId     = dead.CurrentShellId,
             ShellCount         = Math.Max(1, dead.ShellCount),
             Profile            = dead.Profile,
+            Front              = dead.Front,
+            FrontStage         = 0,
             DetectRange        = dead.DetectRange,
             LastYaw            = GetSpawnYaw(room.MapId, dead.Group),
             HullTurnDegPerSec  = dead.HullTurnDegPerSec,
@@ -5015,22 +5025,180 @@ public class RoomServer : GameServer
         return (bx, bz, found);
     }
 
-    // Cached wrapper around PickFiringPosition: recomputes at most ~every 1.5 s (or when
-    // the target has moved > 25 units), so it stays cheap and the chosen spot doesn't
+    // Cached wrapper around PickFiringPosition: recomputes at most ~every 2.4 s (or when
+    // the target has moved > 30 units), so it stays cheap and the chosen spot doesn't
     // jitter tick-to-tick.
     private (float x, float z, bool found) FirePos(
         RoomPlayer bot, RoomPlayer enemy, in CombatProfile prof, ObstacleBox[] obstacles)
     {
         bool stale = DateTime.UtcNow >= bot.FirePosUntil
-            || Distance2D(bot.FirePosForEnemyX, bot.FirePosForEnemyZ, enemy.PosX, enemy.PosZ) > 25f;
+            || Distance2D(bot.FirePosForEnemyX, bot.FirePosForEnemyZ, enemy.PosX, enemy.PosZ) > 30f;
         if (stale && bot.Room != null)
         {
             var (fx, fz, ok) = PickFiringPosition(bot.Room, bot, enemy, prof, obstacles);
             bot.FirePosX = fx; bot.FirePosZ = fz; bot.FirePosValid = ok;
             bot.FirePosForEnemyX = enemy.PosX; bot.FirePosForEnemyZ = enemy.PosZ;
-            bot.FirePosUntil = DateTime.UtcNow.AddSeconds(1.5);
+            bot.FirePosUntil = DateTime.UtcNow.AddSeconds(2.4);
         }
         return (bot.FirePosX, bot.FirePosZ, bot.FirePosValid);
+    }
+
+    /// <summary>
+    /// Picks a nearby cover spot (within ~10..34 m) that blocks incoming LOS from a threat
+    /// while hugging a building/rock or terrain ridge, enabling human-like peek-a-boom.
+    /// </summary>
+    private (float x, float z, bool found) FindReloadCoverPos(
+        BattleRoom room, RoomPlayer bot, float threatX, float threatY, float threatZ, ObstacleBox[] obstacles)
+    {
+        if (DateTime.UtcNow < bot.CoverSpotUntil
+            && Distance2D(bot.CoverSpotForEnemyX, bot.CoverSpotForEnemyZ, threatX, threatZ) < 28f)
+            return (bot.CoverSpotX, bot.CoverSpotZ, bot.CoverSpotValid);
+
+        var cfg = GetMapConfig(room.MapId);
+        float dx = bot.PosX - threatX, dz = bot.PosZ - threatZ;
+        float dl = MathF.Sqrt(dx * dx + dz * dz);
+        if (dl < 0.01f) dl = 0.01f;
+        float awayX = dx / dl, awayZ = dz / dl;
+
+        float bestScore = float.NegativeInfinity;
+        float bx = bot.PosX, bz = bot.PosZ;
+        bool found = false;
+
+        float[] radii = { 11f, 20f, 30f };
+        for (int rIdx = 0; rIdx < radii.Length; rIdx++)
+        {
+            float rad = radii[rIdx];
+            for (int a = 0; a < 10; a++)
+            {
+                float ang = a * (MathF.PI * 2f / 10f);
+                float px = bot.PosX + MathF.Cos(ang) * rad;
+                float pz = bot.PosZ + MathF.Sin(ang) * rad;
+                if (px < cfg.XMin + 7f || px > cfg.XMax - 7f || pz < cfg.ZMin + 7f || pz > cfg.ZMax - 7f) continue;
+                if (IsNavCellBlocked(room, px, pz) || IsNavHazard(room, px, pz)) continue;
+                float py = SampleHeight(room, px, pz) + 1.2f;
+                if (InsideObstacle(px, pz, obstacles, BotHullRadius, py - 1.2f)) continue;
+                if (StepHitsTankOrWreck(room, bot, px, pz, px, pz, SolidTankSpacing)) continue;
+
+                bool covered = (obstacles.Length > 0 && SegmentBlocked3D(px, py, pz, threatX, threatY, threatZ, obstacles))
+                               || TerrainBlocksShot(room, px, pz, py, threatX, threatZ, threatY);
+                if (!covered) continue;
+
+                float obsDist = NearestObstacleDist(px, pz, obstacles);
+                float awayDot = ((px - bot.PosX) / rad) * awayX + ((pz - bot.PosZ) / rad) * awayZ;
+                float score = 40f - rad * 1.1f + awayDot * 16f;
+                if (obsDist < 12f) score += (12f - obsDist) * 1.8f;
+                if (score > bestScore) { bestScore = score; bx = px; bz = pz; found = true; }
+            }
+        }
+
+        bot.CoverSpotX = bx; bot.CoverSpotZ = bz; bot.CoverSpotValid = found;
+        bot.CoverSpotForEnemyX = threatX; bot.CoverSpotForEnemyZ = threatZ;
+        bot.CoverSpotUntil = DateTime.UtcNow.AddSeconds(1.8);
+        return (bx, bz, found);
+    }
+
+    /// <summary>
+    /// Selects the next valid, reachable waypoint along the bot's assigned tactical front
+    /// (Left / Center / Right) using the map's RouteGraph first and a validated lane corridor
+    /// as fallback, avoiding the old random cross-map hopping.
+    /// </summary>
+    private (float wx, float wz) PickFrontWaypoint(
+        BattleRoom room, RoomPlayer bot, MapConfig mapCfg, ObstacleBox[] obstacles,
+        bool isDefender, byte playerGroup)
+    {
+        var ownZone   = bot.Group == 0 ? mapCfg.Team0 : mapCfg.Team1;
+        var enemyZone = bot.Group == 0 ? mapCfg.Team1 : mapCfg.Team0;
+
+        float minFrac, maxFrac;
+        if (isDefender)
+        {
+            minFrac = 0.25f;
+            maxFrac = 0.42f;
+        }
+        else if (bot.Profile.Class == TankClass.TD)
+        {
+            (minFrac, maxFrac) = bot.FrontStage switch
+            {
+                0 => (0.24f, 0.40f),
+                1 => (0.40f, 0.56f),
+                _ => (0.54f, 0.72f),
+            };
+        }
+        else
+        {
+            (minFrac, maxFrac) = bot.FrontStage switch
+            {
+                0 => (0.28f, 0.46f),
+                1 => (0.48f, 0.66f),
+                _ => (0.68f, 0.85f),
+            };
+        }
+
+        float exMinX = mapCfg.XMin + 22f, exMaxX = mapCfg.XMax - 22f;
+        float exMinZ = mapCfg.ZMin + 22f, exMaxZ = mapCfg.ZMax - 22f;
+        EnsureNavGrid(room);
+
+        bool IsValidPoint(float cx, float cz)
+        {
+            if (cx < exMinX || cx > exMaxX || cz < exMinZ || cz > exMaxZ) return false;
+            if (IsNavCellBlocked(room, cx, cz) || IsNavHazard(room, cx, cz)) return false;
+            if (obstacles.Length != 0 && InsideObstacle(cx, cz, obstacles, BotHullRadius, SampleHeight(room, cx, cz))) return false;
+            return FindPath(room, bot.PosX, bot.PosZ, cx, cz) != null;
+        }
+
+        int lane = (int)bot.Front;
+        if (room.RouteGraph != null && !room.RouteGraph.IsEmpty
+            && room.RouteGraph.TryGetFrontWaypoint(
+                ownZone.XCenter, ownZone.ZCenter, enemyZone.XCenter, enemyZone.ZCenter,
+                lane, minFrac, maxFrac, _random, IsValidPoint, out float gx, out float gz))
+        {
+            return (gx, gz);
+        }
+
+        // Geometric corridor along ownBase -> enemyBase axis shifted laterally to the bot's front.
+        float fdx = enemyZone.XCenter - ownZone.XCenter;
+        float fdz = enemyZone.ZCenter - ownZone.ZCenter;
+        float span = MathF.Sqrt(fdx * fdx + fdz * fdz);
+        if (span < 10f) { fdx = 0f; fdz = 1f; span = 100f; }
+        float fwdX = fdx / span, fwdZ = fdz / span;
+        float rightX = -fwdZ, rightZ = fwdX;
+
+        float mapWidthX = mapCfg.XMax - mapCfg.XMin;
+        float mapWidthZ = mapCfg.ZMax - mapCfg.ZMin;
+        float lateralSpan = MathF.Abs(rightX) * mapWidthX + MathF.Abs(rightZ) * mapWidthZ;
+        float laneOffset = lane * MathF.Max(35f, lateralSpan * 0.28f);
+
+        float fallbackX = Math.Clamp(ownZone.XCenter + fwdX * span * ((minFrac + maxFrac) * 0.5f), exMinX, exMaxX);
+        float fallbackZ = Math.Clamp(ownZone.ZCenter + fwdZ * span * ((minFrac + maxFrac) * 0.5f), exMinZ, exMaxZ);
+
+        for (int attempt = 0; attempt < 24; attempt++)
+        {
+            float frac = minFrac + (float)_random.NextDouble() * (maxFrac - minFrac);
+            float jitter = ((float)_random.NextDouble() * 2f - 1f) * 32f;
+            float side = laneOffset * (attempt < 16 ? 1f : 0.45f) + jitter;
+            float cx = Math.Clamp(ownZone.XCenter + fwdX * span * frac + rightX * side, exMinX, exMaxX);
+            float cz = Math.Clamp(ownZone.ZCenter + fwdZ * span * frac + rightZ * side, exMinZ, exMaxZ);
+            if (Distance2D(cx, cz, enemyZone.XCenter, enemyZone.ZCenter) < 45f) continue;
+            if (IsValidPoint(cx, cz))
+                return (cx, cz);
+        }
+
+        return (fallbackX, fallbackZ);
+    }
+
+    private static void ResetBotMotionState(RoomPlayer bot)
+    {
+        bot.CurrentSpeedMps     = 0f;
+        bot.HullAngularVel      = 0f;
+        bot.TurretAngularVel    = 0f;
+        bot.SmoothedSteerOffset = 0f;
+        bot.TiltInit            = false;
+        bot.NavPath             = null;
+        bot.SteerSideBias       = 0;
+        bot.CasemateAligning    = false;
+        bot.HoldingPosition     = false;
+        bot.CoverSpotValid      = false;
+        bot.TacticalState       = BotTacticalState.AdvanceFront;
     }
 
     private void ProcessBotTick(BattleRoom room, byte playerGroup,
@@ -5142,8 +5310,9 @@ public class RoomServer : GameServer
 
             bool  isDefenseAttacker = isDefenseMode && bot.Group == attackerGroup;
             bool  isDefender        = isDefenseMode && bot.Group == playerGroup; // союзники игрока в обороне
+            var   nowUtc            = DateTime.UtcNow;
 
-            // ── select movement target ─────────────────────────────────────────
+            // ── select movement target & human-like tactical state ─────────────
             float targetX, targetZ;
 
             // Detection/pursue radius = this tank's vision. Defense attackers press the
@@ -5152,192 +5321,169 @@ public class RoomServer : GameServer
             // Distance at which the bot plants to fire = its preferred engagement range.
             float fireStopRange = MathF.Max(prof.PreferredRange, 40f);
 
+            float botReload = bot.ReloadBuffUntil > nowUtc ? bot.BotReloadSeconds * 0.5f : bot.BotReloadSeconds;
+            if (bot.AmmoRackState == 1) botReload *= 1.5f;
+            float sinceFire  = bot.LastFireTime == default ? 999f : (float)(nowUtc - bot.LastFireTime).TotalSeconds;
+            float reloadLeft = MathF.Max(0f, botReload - sinceFire);
+            float hpFrac     = bot.MaxHp > 0 ? (float)bot.CurHp / bot.MaxHp : 1f;
+
             // ── ENGAGEMENT: stop-and-shoot at the vehicle's PREFERRED range ────
-            // The bot plants and fires as soon as it has a clear shot at/under its
-            // preferred range (heavy ~90, medium ~125, TD ~200, light ~165) — it does
-            // NOT roll in closer than that, which is what a real class would do.
             bool hasShot = nearestEnemy != null
                 && nearestDist < fireStopRange
                 && !SegmentBlocked3D(bot.PosX, bot.PosY + 1f, bot.PosZ, nearestEnemy.PosX, nearestEnemy.PosY + 1f, nearestEnemy.PosZ, botObstacles)
                 && !TerrainBlocksShot(room, bot.PosX, bot.PosZ, bot.PosY + 1f,
                                             nearestEnemy.PosX, nearestEnemy.PosZ, nearestEnemy.PosY + 1f);
-            if (hasShot) bot.LastLosTime = DateTime.UtcNow;
+            if (hasShot) bot.LastLosTime = nowUtc;
 
-            // Too close for this vehicle's comfort (TDs/lights): it wants to back off
-            // to its stand-off distance rather than brawl. Heavies have StandoffRange 0
-            // so this never triggers for them.
             bool tooClose = nearestEnemy != null && nearestDist < prof.StandoffRange;
+            bool recentlyHitBlind = nearestEnemy == null && (nowUtc - bot.LastHitTime).TotalSeconds < 4.0;
 
-            // Sticky engagement (hysteresis): once planted, stay planted until the
-            // target leaves range (×1.35), dies, or the shot has been blocked for over
-            // 2 s (it took hard cover → go maneuver for a new angle). A bot that wants
-            // to back off is not "engaged-in-place".
+            // Local overmatch check: when allies locally outnumber enemies, non-TDs push more confidently.
+            bool localOvermatch = false;
+            if (!isDefenseMode && nearestEnemy != null && hpFrac > 0.55f && prof.Class != TankClass.TD)
+            {
+                int alliesNear = 0, enemiesNear = 0;
+                foreach (var pl in room.Players.Values)
+                {
+                    if (pl.IsDead) continue;
+                    if (pl.Group == bot.Group && Distance2D(bot, pl) < 130f) alliesNear++;
+                    else if (pl.Group != bot.Group && spotted.Contains(pl.PlayerGUID) && Distance2D(bot, pl) < 150f) enemiesNear++;
+                }
+                localOvermatch = alliesNear >= enemiesNear + 2;
+            }
+
+            // Peek-a-boom: step back into nearby hard cover during long reload instead of standing in the open.
+            bool allowReloadCover = !isDefenseAttacker && !tooClose && nearestEnemy != null
+                && !localOvermatch && botReload >= 4.2f && reloadLeft > 2.2f
+                && prof.Move != MovementStyle.Evasive
+                && !(nearestDist < 52f && prof.Class == TankClass.Heavy && hpFrac > 0.45f);
+            float coverX = bot.PosX, coverZ = bot.PosZ;
+            bool useReloadCover = false;
+            if (allowReloadCover)
+            {
+                (coverX, coverZ, useReloadCover) = FindReloadCoverPos(
+                    room, bot, nearestEnemy!.PosX, nearestEnemy.PosY + 1.2f, nearestEnemy.PosZ, botObstacles);
+            }
+
+            float blindCoverX = bot.PosX, blindCoverZ = bot.PosZ;
+            bool useBlindCover = false;
+            if (recentlyHitBlind)
+            {
+                (blindCoverX, blindCoverZ, useBlindCover) = FindReloadCoverPos(
+                    room, bot, bot.LastHitFromX, bot.PosY + 1.2f, bot.LastHitFromZ, botObstacles);
+            }
+
+            bool evasiveStrafing = prof.Move == MovementStyle.Evasive && reloadLeft > 1.6f
+                                   && nearestEnemy != null && nearestDist < fireStopRange;
+
+            // Sticky engagement (hysteresis) suspended cleanly while ducking to reload cover or blind fire.
             bool engaged;
-            if (bot.HoldingPosition)
+            if (useReloadCover || useBlindCover || evasiveStrafing)
+            {
+                engaged = false;
+            }
+            else if (bot.HoldingPosition)
+            {
                 engaged = nearestEnemy != null && !tooClose
                           && nearestDist < fireStopRange * 1.35f
-                          && (DateTime.UtcNow - bot.LastLosTime).TotalSeconds < 2.0;
+                          && (nowUtc - bot.LastLosTime).TotalSeconds < 2.0;
+            }
             else
+            {
                 engaged = hasShot && !tooClose;
+            }
             bot.HoldingPosition = engaged;
 
             // v48.6: союзные боты обороны используют способности (ремонт/боекомплект/адреналин).
             if (isDefender) TryBotDefenderSkills(room, bot, engaged);
 
-            // Each bot patrols its OWN map half — never crosses into the enemy spawn.
-            // This stops the "bot drives to player spawn and teleports back" loop.
-            //
-            // Which axis actually separates Team0 from Team1 varies by map —
-            // Berlin and Kan both spawn the two teams on the SAME X, split
-            // north/south along Z, while Caucasus splits east/west along X.
-            // Hardcoding "X always divides the teams" (the old assumption)
-            // would patrol bots sideways into territory that has nothing to
-            // do with where they actually spawned on those maps. Pick
-            // whichever axis has the bigger gap between the two team centres.
-            const float waypointArrivalDist = 25f;
+            // Ordered front progression along Left / Center / Right corridor instead of random hopping.
+            const float waypointArrivalDist = 22f;
             bool arrivedAtWaypoint = Distance2D(bot.PosX, bot.PosZ, bot.WaypointX, bot.WaypointZ) < waypointArrivalDist;
             if (arrivedAtWaypoint || (bot.WaypointX == 0 && bot.WaypointZ == 0))
             {
-              if (isDefender)
-              {
-                // v28: РУБЕЖ ОБОРОНЫ вместо спавна.
-                // Раньше точкой патруля был центр собственной базы — поэтому между
-                // волнами защитники разворачивались и уезжали на спавн, вместо того
-                // чтобы держать подходы. Теперь цель смещается на 35% пути в сторону
-                // вражеской зоны: бот стоит ВПЕРЕДИ базы, лицом к наступающим, но не
-                // убегает к ним навстречу. Разброс держит группу компактной.
-                var bz  = playerGroup == 0 ? mapCfg.Team0 : mapCfg.Team1;
-                var ez  = playerGroup == 0 ? mapCfg.Team1 : mapCfg.Team0;
-                float lineX = bz.XCenter + (ez.XCenter - bz.XCenter) * 0.35f;
-                float lineZ = bz.ZCenter + (ez.ZCenter - bz.ZCenter) * 0.35f;
-                for (int attempt = 0; attempt < 12; attempt++)
+                if (arrivedAtWaypoint && (nearestEnemy == null || nearestDist > 130f))
                 {
-                    bot.WaypointX = lineX + _random.Next(-40, 41);
-                    bot.WaypointZ = lineZ + _random.Next(-40, 41);
-                    bot.WaypointX = Math.Clamp(bot.WaypointX, mapCfg.XMin + 10f, mapCfg.XMax - 10f);
-                    bot.WaypointZ = Math.Clamp(bot.WaypointZ, mapCfg.ZMin + 10f, mapCfg.ZMax - 10f);
-                    if (!IsNavCellBlocked(room, bot.WaypointX, bot.WaypointZ)
-                        && (botObstacles.Length == 0 || !InsideObstacle(bot.WaypointX, bot.WaypointZ, botObstacles, 0f, SampleHeight(room, bot.WaypointX, bot.WaypointZ))))
-                        break;
-                }
-              }
-              else
-              {
-                // ПОИСК ПО ВСЕЙ КАРТЕ: бот выбирает точку в пределах ВСЕЙ карты (а не своей
-                // половины), чтобы активно искать врага повсюду. Точка — НЕ внутри здания и
-                // НЕ вплотную к вражескому спавну (чтобы не толпиться на споте). Больше попыток,
-                // т.к. на плотных картах (Каен) валидную точку найти труднее.
-                float exMinX = mapCfg.XMin + 25f, exMaxX = mapCfg.XMax - 25f;
-                float exMinZ = mapCfg.ZMin + 25f, exMaxZ = mapCfg.ZMax - 25f;
-                var enemyZone = bot.Group == 0 ? mapCfg.Team1 : mapCfg.Team0;
-                bool picked = false;
-
-                // Если есть граф маршрутов — патрулируем ПО его узлам: бот берёт случайный узел
-                // нарисованного маршрута как waypoint и едет к нему обычным A* (надёжно, без
-                // хрупкой steer-логики). Узел — в границах, не в здании, не у вражеского спавна.
-                if (room.RouteGraph != null && !room.RouteGraph.IsEmpty)
-                {
-                    // v55: узел маршрута должен вести К вражеской базе (быть ближе к ней, чем бот
-                    // сейчас) — иначе боты катаются по маршруту в центр/назад вместо наступления
-                    // (баг на Берлине: ехали через мост в центр).
-                    float botToEnemy = Distance2D(bot.PosX, bot.PosZ, enemyZone.XCenter, enemyZone.ZCenter);
-                    for (int attempt = 0; attempt < 25; attempt++)
+                    int maxStage = (prof.Class == TankClass.TD && nearestEnemy != null) ? 1 : 2;
+                    if (bot.FrontStage < maxStage)
                     {
-                        if (!room.RouteGraph.TryGetRandomNode(_random, out float nx, out float nz)) break;
-                        nx = Math.Clamp(nx, exMinX, exMaxX); nz = Math.Clamp(nz, exMinZ, exMaxZ);
-                        if (Distance2D(nx, nz, enemyZone.XCenter, enemyZone.ZCenter) < 45f) continue;
-                        if (Distance2D(nx, nz, enemyZone.XCenter, enemyZone.ZCenter) > botToEnemy - 10f) continue; // ведёт к врагу
-                        if (IsNavCellBlocked(room, nx, nz) || IsNavHazard(room, nx, nz)) continue;
-                        if (botObstacles.Length != 0 && InsideObstacle(nx, nz, botObstacles, 0f, SampleHeight(room, nx, nz))) continue;
-                        // Точка должна быть ДОСТИЖИМА (иначе бот упирается в дома/красную линию)
-                        if (FindPath(room, bot.PosX, bot.PosZ, nx, nz) == null) continue;
-                        bot.WaypointX = nx; bot.WaypointZ = nz; picked = true; break;
+                        bot.FrontStage++;
+                    }
+                    else if (!isDefender && nearestEnemy == null)
+                    {
+                        // Finished sweeping current front with no contact -> rotate to sweep another front.
+                        bot.Front = bot.Front switch
+                        {
+                            BotFront.Left   => BotFront.Center,
+                            BotFront.Center => BotFront.Right,
+                            _               => BotFront.Left,
+                        };
                     }
                 }
-
-                // v55 (пути, п.1/3): если по графу не выбрали — вейпоинт СМЕЩЁН К ВРАЖЕСКОЙ БАЗЕ с
-                // боковым разбросом. Выбираем только валидную (не в воде/обрыве/здании) точку.
-                if (!picked)
-                {
-                    float ex = enemyZone.XCenter, ez = enemyZone.ZCenter;
-                    float adx = ex - bot.PosX, adz = ez - bot.PosZ;
-                    float dl = MathF.Sqrt(adx * adx + adz * adz);
-                    if (dl < 1f) { adx = 0f; adz = 1f; dl = 1f; }
-                    adx /= dl; adz /= dl;
-                    float apx = -adz, apz = adx;            // перпендикуляр для бокового разброса по фронту
-                    float fx = bot.PosX, fz = bot.PosZ;
-                    bool hasFallback = false;
-                    for (int attempt = 0; attempt < 30; attempt++)
-                    {
-                        float frac = 0.4f + (float)_random.NextDouble() * 0.5f;             // 40..90% пути к базе
-                        float side = ((float)_random.NextDouble() * 2f - 1f) * dl * 0.35f;  // боковой разброс
-                        float wx = Math.Clamp(bot.PosX + adx * dl * frac + apx * side, exMinX, exMaxX);
-                        float wz = Math.Clamp(bot.PosZ + adz * dl * frac + apz * side, exMinZ, exMaxZ);
-                        if (Distance2D(wx, wz, ex, ez) < 45f) continue;                     // не в сам спавн врага
-                        if (IsNavCellBlocked(room, wx, wz) || IsNavHazard(room, wx, wz)) continue;
-                        if (botObstacles.Length != 0 && InsideObstacle(wx, wz, botObstacles, 0f, SampleHeight(room, wx, wz))) continue;
-                        if (!hasFallback) { fx = wx; fz = wz; hasFallback = true; }
-                        if (FindPath(room, bot.PosX, bot.PosZ, wx, wz) == null) continue;
-                        bot.WaypointX = wx; bot.WaypointZ = wz; picked = true; break;       // достижима — лучшая
-                    }
-                    if (!picked) { bot.WaypointX = fx; bot.WaypointZ = fz; }
-                }
-              }
+                (bot.WaypointX, bot.WaypointZ) = PickFrontWaypoint(
+                    room, bot, mapCfg, botObstacles, isDefender, playerGroup);
             }
 
             if (engaged)
             {
-                // Clear shot at/under preferred range → PLANT and fire. Speed is forced
-                // to 0 below and separation/wander are suppressed, so the bot sits dead
-                // still facing the target instead of skating or wobbling.
                 targetX = bot.PosX; targetZ = bot.PosZ;
+                bot.TacticalState = BotTacticalState.FireHold;
             }
             else if (tooClose && nearestEnemy != null)
             {
-                // Enemy is inside this vehicle's comfort range (a TD/light that got
-                // rushed) → reverse away from it toward its stand-off distance, still
-                // facing the enemy so the gun stays on target while backing off.
                 float ax = bot.PosX - nearestEnemy.PosX, az = bot.PosZ - nearestEnemy.PosZ;
                 float al = MathF.Sqrt(ax * ax + az * az); if (al < 0.01f) al = 0.01f;
                 targetX = bot.PosX + (ax / al) * 60f;
                 targetZ = bot.PosZ + (az / al) * 60f;
+                bot.TacticalState = BotTacticalState.Retreat;
             }
-            else if (isDefenseMode && nearestEnemy != null)
+            else if (useReloadCover)
             {
-                // Enemy spotted but no clean shot yet → move to a tactical firing spot
-                // (LOS + preferred range + cover), or close in if nowhere near can see it.
+                targetX = coverX; targetZ = coverZ;
+                bot.TacticalState = BotTacticalState.ReloadCover;
+            }
+            else if (useBlindCover)
+            {
+                targetX = blindCoverX; targetZ = blindCoverZ;
+                bot.TacticalState = BotTacticalState.ReloadCover;
+            }
+            else if ((isDefenseMode || nearestDist < engageRadius) && nearestEnemy != null)
+            {
                 var (fx, fz, ok) = FirePos(bot, nearestEnemy, prof, botObstacles);
                 targetX = ok ? fx : nearestEnemy.PosX;
                 targetZ = ok ? fz : nearestEnemy.PosZ;
+                bot.TacticalState = ok && reloadLeft <= 2.2f
+                    ? BotTacticalState.PeekOut
+                    : (prof.Move == MovementStyle.Evasive ? BotTacticalState.FlankManoeuvre : BotTacticalState.AdvanceFront);
             }
             else if (isDefenseAttacker)
             {
-                // Живых защитников не видно → едем на их базу.
-                var baseZone = playerGroup == 0 ? mapCfg.Team0 : mapCfg.Team1;
-                targetX = baseZone.XCenter + bot.AssignedZOffset * 0.4f;
-                targetZ = baseZone.ZCenter + bot.AssignedZOffset;
+                // Живых защитников не видно → продвигаемся по своему фронту к базе обороны.
+                if (bot.FrontStage < 2)
+                {
+                    targetX = bot.WaypointX;
+                    targetZ = bot.WaypointZ;
+                }
+                else
+                {
+                    var baseZone = playerGroup == 0 ? mapCfg.Team0 : mapCfg.Team1;
+                    float laneSpread = (int)bot.Front * 42f;
+                    targetX = baseZone.XCenter + laneSpread * 0.4f + bot.AssignedZOffset * 0.25f;
+                    targetZ = baseZone.ZCenter + laneSpread * 0.6f + bot.AssignedZOffset * 0.5f;
+                }
+                bot.TacticalState = BotTacticalState.AdvanceFront;
             }
-            else if (nearestEnemy != null && nearestDist < engageRadius)
+            else if ((nowUtc - bot.LastSeenEnemyTime).TotalSeconds < 10.0
+                     && Distance2D(bot.PosX, bot.PosZ, bot.LastSeenEnemyX, bot.LastSeenEnemyZ) > 10f)
             {
-                // Enemy spotted, out of fire range or shot blocked → move to a tactical
-                // firing spot (LOS + preferred range + cover); close in if none found.
-                var (fx, fz, ok) = FirePos(bot, nearestEnemy, prof, botObstacles);
-                targetX = ok ? fx : nearestEnemy.PosX;
-                targetZ = ok ? fz : nearestEnemy.PosZ;
-            }
-            else if ((DateTime.UtcNow - bot.LastSeenEnemyTime).TotalSeconds < 4.0
-                     && Distance2D(bot.PosX, bot.PosZ, bot.LastSeenEnemyX, bot.LastSeenEnemyZ) > 8f)
-            {
-                // Lost sight of the enemy but saw it moments ago → push to its last-known
-                // position to re-acquire, instead of instantly forgetting it (perception
-                // memory). Doesn't fire — there's nothing spotted to fire at.
                 targetX = bot.LastSeenEnemyX; targetZ = bot.LastSeenEnemyZ;
+                bot.TacticalState = BotTacticalState.FlankManoeuvre;
             }
             else
             {
-                // Nothing seen → patrol to the current waypoint.
                 targetX = bot.WaypointX;
                 targetZ = bot.WaypointZ;
+                bot.TacticalState = BotTacticalState.AdvanceFront;
             }
 
             // Route-following ВРЕМЕННО ОТКЛЮЧЕНО. Нарисованные маршруты сняты с миникарты и
@@ -5490,28 +5636,29 @@ public class RoomServer : GameServer
             float adjDist = MathF.Sqrt(adjDx * adjDx + adjDz * adjDz);
             if (adjDist < 0.001f) adjDist = 0.001f;
 
-            // ── retreat when HP critical (threshold by class) ──────────────────
+            // ── retreat / cover-back / smooth approach speed ──────────────────
             float retreatFrac = bot.IsCommander ? MathF.Max(prof.RetreatHpFrac, 0.45f) : prof.RetreatHpFrac;
-            bool retreating = bot.CurHp < bot.MaxHp * retreatFrac;
+            bool retreating = hpFrac < retreatFrac;
             float moveGoalDx = retreating ? -adjDx : adjDx;
             float moveGoalDz = retreating ? -adjDz : adjDz;
 
-            float arriveThreshold = 4f;
+            float arriveThreshold = 3.5f;
             float roleSpeedScale  = prof.SpeedScale;
             float hullFwdX = MathF.Sin(bot.LastYaw * (MathF.PI / 180f));
             float hullFwdZ = MathF.Cos(bot.LastYaw * (MathF.PI / 180f));
             float targetSpeed;
             bool wantReverse = false;
+            bool isFinalApproach = !followingNavPath || (bot.NavPath != null && bot.NavPathIndex >= bot.NavPath.Count - 1);
+
             if (retreating)
             {
-                // Reverse backward while keeping frontal armor facing an enemy in front of us;
-                // otherwise turn and flee forward — no double-negative reversal!
+                bot.TacticalState = BotTacticalState.Retreat;
                 float awayLen = MathF.Max(0.001f, MathF.Sqrt(moveGoalDx * moveGoalDx + moveGoalDz * moveGoalDz));
                 float fwdDotAway = (hullFwdX * moveGoalDx + hullFwdZ * moveGoalDz) / awayLen;
                 if (nearestEnemy != null && fwdDotAway < -0.25f)
                 {
                     wantReverse = true;
-                    targetSpeed = -bot.MaxBackSpeedMps * 0.75f;
+                    targetSpeed = -bot.MaxBackSpeedMps * 0.8f;
                 }
                 else
                 {
@@ -5519,29 +5666,55 @@ public class RoomServer : GameServer
                 }
             }
             else if (engaged)
-                targetSpeed = 0f;                                    // has a shot → STOP and fire
+            {
+                targetSpeed = 0f;
+            }
             else if (dist > arriveThreshold)
-                targetSpeed = bot.MaxForwardSpeedMps * roleSpeedScale;
+            {
+                // Real players reverse smoothly into nearby cover after shooting so front armor stays facing the enemy.
+                bool coverReverse = (useReloadCover || useBlindCover || tooClose) && nearestEnemy != null && dist < 36f;
+                float goalLen = MathF.Max(0.001f, MathF.Sqrt(moveGoalDx * moveGoalDx + moveGoalDz * moveGoalDz));
+                float fwdDotGoal = (hullFwdX * moveGoalDx + hullFwdZ * moveGoalDz) / goalLen;
+                if (coverReverse && fwdDotGoal < -0.20f)
+                {
+                    wantReverse = true;
+                    targetSpeed = -bot.MaxBackSpeedMps * 0.85f;
+                }
+                else
+                {
+                    targetSpeed = bot.MaxForwardSpeedMps * roleSpeedScale;
+                }
+
+                // Gentle deceleration as we arrive at the firing or cover spot (no sudden full-speed stop).
+                if (isFinalApproach && dist < 18f)
+                {
+                    float approachMult = Math.Clamp(dist / 16f, 0.28f, 1f);
+                    targetSpeed *= approachMult;
+                }
+            }
             else if (sepMag > 1.2f)
+            {
                 targetSpeed = bot.MaxForwardSpeedMps * 0.15f;
+            }
             else
-                targetSpeed = 0f;                                    // arrived → hold
+            {
+                targetSpeed = 0f;
+            }
 
             // Сбита гусеница → бот полностью обездвижен (не едет И не поворачивает корпус).
             CheckTrackRepair(room, bot);
             bool trackBroken = bot.TrackImmobilized;
-            if (trackBroken) { targetSpeed = 0f; bot.CurrentSpeedMps = 0f; }
+            if (trackBroken) { targetSpeed = 0f; bot.CurrentSpeedMps = 0f; bot.HullAngularVel = 0f; }
 
             // Casemate TDs with a spotted enemy in fire range & clear LOS must rotate their hull
             // onto target rather than driving sideways without bringing the gun into arc.
             bool casemateAimTurn = !trackBroken && !prof.Turreted && nearestEnemy != null
-                && !retreating && !tooClose
+                && !retreating && !tooClose && !useReloadCover
                 && nearestDist < (isDefenseAttacker ? engageRadius : fireStopRange * 1.35f)
                 && !SegmentBlocked3D(bot.PosX, bot.PosY + 1f, bot.PosZ, nearestEnemy.PosX, nearestEnemy.PosY + 1f, nearestEnemy.PosZ, botObstacles)
                 && !TerrainBlocksShot(room, bot.PosX, bot.PosZ, bot.PosY + 1f, nearestEnemy.PosX, nearestEnemy.PosZ, nearestEnemy.PosY + 1f);
 
-            // Steer desired heading BEFORE moving using forward obstacle whiskers + side hysteresis
-            // so tanks drive strictly along their hull axis instead of sliding sideways.
+            // Steer desired heading BEFORE moving using smooth gradual obstacle feelers.
             float steerDirX = wantReverse ? -moveGoalDx : moveGoalDx;
             float steerDirZ = wantReverse ? -moveGoalDz : moveGoalDz;
             float desiredYaw = MathF.Atan2(steerDirX, steerDirZ) * (180f / MathF.PI);
@@ -5565,28 +5738,32 @@ public class RoomServer : GameServer
                 }
                 else if (MathF.Abs(targetSpeed) < 0.1f)
                 {
-                    // Стоим на месте и цель уже внутри УГН — фиксируем корпус, наводим только пушку.
                     desiredYaw = bot.LastYaw;
                 }
             }
+            float rawSteer = 0f;
             if (!trackBroken && MathF.Abs(targetSpeed) > 0.1f)
             {
-                float lookDist = Math.Clamp(MathF.Abs(bot.CurrentSpeedMps) * 1.1f + 4f, 6f, 15f);
+                float lookDist = Math.Clamp(MathF.Abs(bot.CurrentSpeedMps) * 1.15f + 5f, 7f, 16f);
                 float probeYaw = wantReverse ? desiredYaw + 180f : desiredYaw;
-                desiredYaw += ChooseSteerYawOffset(room, bot, probeYaw, lookDist, botObstacles, mapCfg);
+                rawSteer = ChooseSteerYawOffset(room, bot, probeYaw, lookDist, botObstacles, mapCfg);
             }
+            bot.SmoothedSteerOffset += (rawSteer - bot.SmoothedSteerOffset) * 0.38f;
+            if (rawSteer == 0f && MathF.Abs(bot.SmoothedSteerOffset) < 0.25f) bot.SmoothedSteerOffset = 0f;
+            desiredYaw += bot.SmoothedSteerOffset;
 
             float yawErr = MathF.Abs(((desiredYaw - bot.LastYaw + 540f) % 360f) - 180f);
             bool turningInPlace = false;
-            if (!trackBroken && ((bot.CasemateAligning && targetSpeed == 0f && yawErr > 1.5f) || (targetSpeed > 0.01f && yawErr > 75f)))
+            if (!trackBroken && ((bot.CasemateAligning && targetSpeed == 0f && yawErr > 1.5f) || (targetSpeed > 0.01f && yawErr > 102f)))
             {
-                targetSpeed    = 0f;      // pivot turn cleanly without instant zero-slam
+                targetSpeed    = 0f;
                 turningInPlace = true;
             }
-            else if (!trackBroken && targetSpeed > 0.01f && yawErr > 15f)
+            else if (!trackBroken && targetSpeed > 0.01f && yawErr > 12f)
             {
-                float cornerScale = MathF.Cos((yawErr - 15f) * (MathF.PI / 180f));
-                targetSpeed *= Math.Clamp(cornerScale, 0.25f, 1f);
+                float tCorner = Math.Clamp((yawErr - 12f) / 90f, 0f, 1f);
+                float cornerScale = MathF.Cos(tCorner * (MathF.PI * 0.42f));
+                targetSpeed *= Math.Clamp(cornerScale, 0.22f, 1f);
             }
 
             // Compute target hull yaw smoothly BEFORE stepping position.
@@ -5603,55 +5780,67 @@ public class RoomServer : GameServer
             {
                 float toEnemy = MathF.Atan2(nearestEnemy.PosX - bot.PosX, nearestEnemy.PosZ - bot.PosZ) * (180f / MathF.PI);
                 float tdErr   = MathF.Abs(NormalizeAngle180(toEnemy - bot.LastYaw));
-                // Безбашенную ПТ не дёргаем по мелким углам, если враг и так в УГН;
-                // башенные ставим «ромбом» или держим нос на противника с запасом deadZone.
                 if (!prof.Turreted && !bot.CasemateAligning && tdErr <= CasemateMaxArcDeg - 2.5f)
                 {
                     targetYaw = bot.LastYaw;
                 }
-                else if (prof.Turreted && bot.HoldingPosition && MathF.Abs(bot.CurrentSpeedMps) < 0.35f && prof.Class != TankClass.Light && prof.Class != TankClass.TD)
+                else if (prof.Turreted && prof.Class != TankClass.Light && prof.Class != TankClass.TD
+                         && MathF.Abs(bot.CurrentSpeedMps) < 0.45f)
                 {
+                    // Angle hull armor ("ромб") when holding or exposed cleanly to shots
                     float side = (bot.PlayerGUID % 2 == 0) ? 1f : -1f;
-                    targetYaw = toEnemy + side * 27f;
+                    float angleDeg = prof.Class == TankClass.Heavy ? 28f : 23f;
+                    targetYaw = toEnemy + side * angleDeg;
                 }
                 else
                 {
                     targetYaw = toEnemy;
                 }
             }
+            else if (recentlyHitBlind)
+            {
+                float toShooter = MathF.Atan2(bot.LastHitFromX - bot.PosX, bot.LastHitFromZ - bot.PosZ) * (180f / MathF.PI);
+                float side = (bot.PlayerGUID % 2 == 0) ? 1f : -1f;
+                targetYaw = prof.Turreted ? toShooter + side * 24f : toShooter;
+            }
             else
             {
                 targetYaw = bot.LastYaw;
             }
 
-            // Smooth realistic hull traverse rate; completely locked when TrackImmobilized.
+            // Inertia-smoothed hull traverse (angular acceleration ramp avoids jerky snap turns).
             float maxTurnDegPerSec = bot.HullTurnDegPerSec > 1f
                 ? bot.HullTurnDegPerSec
                 : prof.Class switch
                 {
-                    TankClass.Light  => 58f,
-                    TankClass.Medium => 46f,
-                    TankClass.TD     => 38f,
-                    TankClass.Heavy  => 34f,
+                    TankClass.Light  => 54f,
+                    TankClass.Medium => 44f,
+                    TankClass.TD     => 36f,
+                    TankClass.Heavy  => 32f,
                     _                => 30f,
                 };
+            float safeDt  = Math.Clamp(dt, 0.04f, 0.25f);
             float yawStep = 0f;
             if (!trackBroken)
             {
                 float yawDelta = ((targetYaw - bot.LastYaw + 540f) % 360f) - 180f;
                 bool stationaryHold = MathF.Abs(targetSpeed) < 0.1f && !turningInPlace;
-                float deadZone = stationaryHold ? 1.8f : 0.3f;
-                if (MathF.Abs(yawDelta) >= deadZone)
-                {
-                    float maxStep = maxTurnDegPerSec * Math.Clamp(dt, 0.04f, 0.25f);
-                    yawStep = Math.Clamp(yawDelta * 0.45f, -maxStep, maxStep);
-                }
+                float deadZone = stationaryHold ? 1.5f : 0.25f;
+                float desiredAngVel = MathF.Abs(yawDelta) >= deadZone
+                    ? Math.Clamp(yawDelta * 2.2f, -maxTurnDegPerSec, maxTurnDegPerSec)
+                    : 0f;
+                float maxAngAccel = maxTurnDegPerSec * 4.5f;
+                bot.HullAngularVel += Math.Clamp(desiredAngVel - bot.HullAngularVel, -maxAngAccel * safeDt, maxAngAccel * safeDt);
+                if (desiredAngVel == 0f && MathF.Abs(bot.HullAngularVel) < 1.5f) bot.HullAngularVel = 0f;
+                yawStep = bot.HullAngularVel * safeDt;
+                if (MathF.Abs(yawDelta) < MathF.Abs(yawStep) && MathF.Sign(yawDelta) == MathF.Sign(yawStep))
+                    yawStep = yawDelta;
             }
             float yaw = ((bot.LastYaw + yawStep) % 360f + 360f) % 360f;
             if (yaw >= 360f) yaw -= 360f;
             bot.LastYaw = yaw;
 
-            // Smooth speed ramp
+            // Smooth speed ramp (gentle acceleration & natural braking)
             if (trackBroken)
             {
                 bot.CurrentSpeedMps = 0f;
@@ -5659,7 +5848,7 @@ public class RoomServer : GameServer
             else
             {
                 float accelDist = MathF.Abs(targetSpeed) > 0.01f ? MathF.Abs(targetSpeed) : bot.MaxForwardSpeedMps;
-                float accelTime = MathF.Abs(targetSpeed) > 0.01f ? 2.4f : 0.85f;
+                float accelTime = MathF.Abs(targetSpeed) > 0.01f ? 2.2f : (tooClose ? 1.0f : 1.45f);
                 float accel     = accelDist / accelTime;
                 if (bot.CurrentSpeedMps < targetSpeed)
                     bot.CurrentSpeedMps = Math.Min(targetSpeed, bot.CurrentSpeedMps + accel * dt);
@@ -5720,7 +5909,7 @@ public class RoomServer : GameServer
                 bot.PosX = prevX;
                 bot.PosZ = prevZ;
                 if (MathF.Abs(targetSpeed) > 0.1f)
-                    bot.CurrentSpeedMps = 0f;
+                    bot.CurrentSpeedMps *= 0.35f;
             }
             if (turningInPlace && MathF.Abs(bot.CurrentSpeedMps) < 0.5f) { bot.CurrentSpeedMps = 0f; }
             float actualDx = bot.PosX - prevX;
@@ -5791,10 +5980,10 @@ public class RoomServer : GameServer
                     : PickSpawnSpot(room, attackerGroup);
                 bot.PosY            = SampleHeight(room, bot.PosX, bot.PosZ);
                 bot.LastYaw         = GetSpawnYaw(room.MapId, attackerGroup);
-                bot.CurrentSpeedMps = 0f;
-                bot.TiltInit        = false;
-                bot.NavPath         = null;
-                bot.SteerSideBias   = 0;
+                bot.FrontStage      = 0;
+                bot.WaypointX       = 0f;
+                bot.WaypointZ       = 0f;
+                ResetBotMotionState(bot);
                 bot.CurHp           = bot.MaxHp;
 
                 if (room.PveDefenseLives <= 0 && !room.BattleEnded)
@@ -5818,12 +6007,39 @@ public class RoomServer : GameServer
                 gunAngle = -MathF.Atan2(dy, MathF.Max(horiz, 0.1f)) * (180f / MathF.PI);
                 gunAngle = Math.Clamp(gunAngle, -18f, 8f);
             }
-            float maxTurretStep = MathF.Max(15f, bot.TurretTurnDegPerSec) * Math.Clamp(dt, 0.04f, 0.25f);
+            else if (prof.Turreted)
+            {
+                if ((nowUtc - bot.LastHitTime).TotalSeconds < 5.0)
+                {
+                    float hitYaw = MathF.Atan2(bot.LastHitFromX - bot.PosX, bot.LastHitFromZ - bot.PosZ) * (180f / MathF.PI);
+                    desiredLocalTurret = NormalizeAngle180(hitYaw - yaw);
+                }
+                else if ((nowUtc - bot.LastSeenEnemyTime).TotalSeconds < 12.0)
+                {
+                    float lastYaw = MathF.Atan2(bot.LastSeenEnemyX - bot.PosX, bot.LastSeenEnemyZ - bot.PosZ) * (180f / MathF.PI);
+                    desiredLocalTurret = NormalizeAngle180(lastYaw - yaw);
+                }
+                else
+                {
+                    float threatYaw = GetSpawnYaw(room.MapId, bot.Group);
+                    float scanPhase = (float)nowUtc.TimeOfDay.TotalSeconds * 0.7f + (bot.PlayerGUID % 17);
+                    desiredLocalTurret = NormalizeAngle180(threatYaw + MathF.Sin(scanPhase) * 15f - yaw);
+                }
+            }
+            float maxTurretRate = MathF.Max(15f, bot.TurretTurnDegPerSec);
             float turretDelta = prof.Turreted
                 ? NormalizeAngle180(desiredLocalTurret - bot.CurrentTurretAngle)
                 : (desiredLocalTurret - bot.CurrentTurretAngle);
-            bot.CurrentTurretAngle = NormalizeAngle180(
-                bot.CurrentTurretAngle + Math.Clamp(turretDelta, -maxTurretStep, maxTurretStep));
+            float desiredTurretVel = MathF.Abs(turretDelta) > 0.35f
+                ? Math.Clamp(turretDelta * 3.0f, -maxTurretRate, maxTurretRate)
+                : 0f;
+            float maxTurretAccel = maxTurretRate * 5.5f;
+            bot.TurretAngularVel += Math.Clamp(desiredTurretVel - bot.TurretAngularVel, -maxTurretAccel * safeDt, maxTurretAccel * safeDt);
+            if (desiredTurretVel == 0f && MathF.Abs(bot.TurretAngularVel) < 1.5f) bot.TurretAngularVel = 0f;
+            float turretStep = bot.TurretAngularVel * safeDt;
+            if (MathF.Abs(turretDelta) < MathF.Abs(turretStep) && MathF.Sign(turretDelta) == MathF.Sign(turretStep))
+                turretStep = turretDelta;
+            bot.CurrentTurretAngle = NormalizeAngle180(bot.CurrentTurretAngle + turretStep);
             if (!prof.Turreted)
                 bot.CurrentTurretAngle = Math.Clamp(bot.CurrentTurretAngle, -CasemateMaxArcDeg, CasemateMaxArcDeg);
             float turretAngle = bot.CurrentTurretAngle;
@@ -5847,10 +6063,7 @@ public class RoomServer : GameServer
                 gunAimed = aimErr <= maxErr && insideCasemateArc;
             }
             bool canShoot = realTarget != null && reacted && gunAimed && Distance2D(bot, realTarget) < shootRange;
-            // v12: повреждённая боеукладка (Injure) заряжает в 1.5 раза дольше.
-            float botReload = bot.ReloadBuffUntil > DateTime.UtcNow ? bot.BotReloadSeconds * 0.5f : bot.BotReloadSeconds;
-            if (bot.AmmoRackState == 1) botReload *= 1.5f;
-            if (canShoot && (DateTime.UtcNow - bot.LastFireTime).TotalSeconds > botReload)
+            if (canShoot && (nowUtc - bot.LastFireTime).TotalSeconds > botReload)
             {
                 // Block the shot if any obstacle box or terrain ridge sits on the line of fire
                 // to either the target's current position or lead point (checked in FireBot).
@@ -7332,6 +7545,13 @@ public class RoomServer : GameServer
         }
 
         attacker.LastShellResult = shellResult;   // v13: для декалей (TypeDecal)
+        if (!target.IsDead)
+        {
+            target.LastHitTime   = DateTime.UtcNow;
+            target.LastHitByGuid = attacker.PlayerGUID;
+            target.LastHitFromX  = attacker.PosX;
+            target.LastHitFromZ  = attacker.PosZ;
+        }
 
         // ── v26: ГУСЕНИЦЫ ОТ ВЫСТРЕЛОВ БОТОВ ────────────────────────────────────
         // Раньше ходовая рвалась ТОЛЬКО в HandleAPHit, то есть исключительно от
@@ -7737,12 +7957,11 @@ public class RoomServer : GameServer
                         deadBot.AmmoRackState   = 0; deadBot.AmmoRackHp = deadBot.AmmoRackMaxHp;
                         deadBot.FuelTankState   = 0; deadBot.FuelTankHp = deadBot.FuelTankMaxHp;
                         deadBot.BurnUntil       = DateTime.MinValue;
-                        deadBot.CurrentSpeedMps = 0f;
-                        deadBot.NavPath         = null;
                         deadBot.WaypointX       = 0f;
                         deadBot.WaypointZ       = 0f;
-                        deadBot.TiltInit        = false;
-                        deadBot.SteerSideBias   = 0;
+                        deadBot.FrontStage      = 0;
+                        deadBot.LastHitTime     = default;
+                        ResetBotMotionState(deadBot);
                         var (rsx, rsz) = PickSpawnSpot(room, deadBot.Group);
                         deadBot.PosX = rsx; deadBot.PosZ = rsz;
                         deadBot.PosY = SampleHeight(room, rsx, rsz);
@@ -8772,6 +8991,23 @@ public class RoomPlayer
     // convergence (accuracy improves the longer it holds the same target).
     public long     AimTargetGuid      { get; set; }
     public DateTime AimStartTime       { get; set; }
+    // ── Smooth motion, front lanes & human-like combat memory ──────────────────
+    public BotFront         Front               { get; set; } = BotFront.Center;
+    public int              FrontStage          { get; set; }
+    public BotTacticalState TacticalState       { get; set; } = BotTacticalState.AdvanceFront;
+    public float            HullAngularVel      { get; set; } // deg/s (inertia-smoothed hull turn)
+    public float            TurretAngularVel    { get; set; } // deg/s (inertia-smoothed turret turn)
+    public float            SmoothedSteerOffset { get; set; } // deg (low-pass feeler steer offset)
+    public float            CoverSpotX          { get; set; }
+    public float            CoverSpotZ          { get; set; }
+    public bool             CoverSpotValid      { get; set; }
+    public DateTime         CoverSpotUntil      { get; set; }
+    public float            CoverSpotForEnemyX  { get; set; }
+    public float            CoverSpotForEnemyZ  { get; set; }
+    public long             LastHitByGuid       { get; set; }
+    public float            LastHitFromX        { get; set; }
+    public float            LastHitFromZ        { get; set; }
+    public DateTime         LastHitTime         { get; set; }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
