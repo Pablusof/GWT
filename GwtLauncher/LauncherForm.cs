@@ -52,6 +52,12 @@ public sealed class LauncherForm : Form, IBackdropProvider
     private sealed record ChangelogEntry(string Version, string Date, string Badge, Color BadgeColor, string[] Bullets);
     private static readonly ChangelogEntry[] ChangelogEntries =
     {
+        new("v1.5.1", "25 ноября 2026", "ФИКС", SpaceTheme.AccentCyan, new[]
+        {
+            "Оборона: спавн и возрождение защитников строго на 2 назначенных фланговых спавнах (а не посередине у моста).",
+            "Оборона: вражеские волны идут напрямую на штурм моста (отстреливаясь на ходу), а не блуждают в поисках игроков.",
+            "Исправлено залипание на ~10 с при въезде в дом или границу карты — теперь танк сразу сдаёт назад.",
+        }),
         new("v1.5.0", "25 ноября 2026", "ОБНОВЛЕНИЕ", SpaceTheme.AccentGreen, new[]
         {
             "Оборона: бомбардировщики < 30% ХП (КД 30 с), Катюша ~10% ХП (КД 60 с), починена починка, ровно 2 спавна врагов.",

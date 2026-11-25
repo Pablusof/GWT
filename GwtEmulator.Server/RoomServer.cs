@@ -53,6 +53,7 @@ public class RoomServer : GameServer
     private readonly ConcurrentDictionary<long, RoomPlayer>  _players = new();
     private long _waveBotSeq = -1000; // unique GUIDs for freshly-spawned wave bots
     private int  _attackerSpawnIdx = -1; // round-robin index over a map's AttackerSpawns
+    private int  _defenderSpawnIdx = -1; // round-robin index over Defense assigned defender spawns
     private readonly Random _random = new();
 
     // ── per-map configuration ─────────────────────────────────────────────────
@@ -438,18 +439,28 @@ public class RoomServer : GameServer
             Obstacles: Array.Empty<ObstacleBox>()),
 
         // ── Сталинград (network MapId 30) — ТОЛЬКО РЕЖИМ ОБОРОНЫ ─────────────
-        // Точки из driven PlayerPos. Защитники (игрок + союзники) — линия обороны на
-        // Z≈145: игрок в центре (290,145), союзники по краям (132,147)/(438,142).
-        // Враги (волны) — линия атаки на Z≈482: (145,482)/(297,480)/(455,484).
+        // Официальные координаты из Table_Coordinates (level0, id 646..658):
+        //   Защитники (2 назначенных спавна по краям, НЕ посередине у моста):
+        //     Левый:  (132.2, 143.1), (118.1, 152.3), (146.6, 152.4), (163.6, 143.0) [rotY=90]
+        //     Правый: (461.3, 148.7), (447.6, 141.3), (426.1, 146.3), (417.7, 135.7), (475.7, 135.7), (487.6, 143.8) [rotY=-90]
+        //   Мост / цель прорыва врагов (центр базы обороны): (290, 145)
+        //   Враги (ровно 2 спавна по флангам линии атаки, id 656 и 658): (150.7, 478.0) и (458.1, 478.2)
         [30] = new(30, "Сталинград",
             XMin: 20, XMax: 580, ZMin: 125, ZMax: 580,
-            Team0: new(XCenter: 290f, XHalfSpread: 20f, ZCenter: 145f, ZHalfSpread: 12f, Y: 33f),
-            Team1: new(XCenter: 297f, XHalfSpread: 30f, ZCenter: 482f, ZHalfSpread: 12f, Y: 33f),
+            Team0: new(XCenter: 290f, XHalfSpread: 20f, ZCenter: 145f, ZHalfSpread: 12f, Y: 30f),
+            Team1: new(XCenter: 297f, XHalfSpread: 30f, ZCenter: 482f, ZHalfSpread: 12f, Y: 30f),
             Obstacles: Array.Empty<ObstacleBox>(),
-            // Чистые позиции у ворот и перед линией стен (не за глухим забором с трубами):
-            BotSpawns:      new (float, float)[] { (180f, 185f), (275f, 185f), (375f, 185f), (205f, 145f), (365f, 145f) },
-            // Ровно 2 спавна врагов по флангам линии атаки:
-            AttackerSpawns: new (float, float)[] { (150f, 475f), (455f, 475f) }),
+            // Официальные назначенные спавны защитников (чередуем левый и правый, не посередине!):
+            BotSpawns: new (float, float)[]
+            {
+                (132.2f, 143.1f), (461.3f, 148.7f),
+                (146.6f, 152.4f), (447.6f, 141.3f),
+                (163.6f, 143.0f), (426.1f, 146.3f),
+                (118.1f, 152.3f), (475.7f, 135.7f),
+                (417.7f, 135.7f), (487.6f, 143.8f),
+            },
+            // Ровно 2 спавна врагов по флангам линии атаки (id 656 и 658):
+            AttackerSpawns: new (float, float)[] { (150.7f, 478.0f), (458.1f, 478.2f) }),
 
         // ── Горящие пески / alm (network MapId 11) ────────────────────────────
         // ИСПРАВЛЕНО: этот id грузит НЕ Берлин, а пустынную карту «Горящие пески»
@@ -635,8 +646,38 @@ public class RoomServer : GameServer
     private (float x, float z) PickSpawnSpot(BattleRoom room, byte group)
     {
         var cfg  = GetMapConfig(room.MapId);
+        // В режиме Обороны защитники (и игроки, и союзные боты — и при старте, и при возрождении!)
+        // спавнятся ТОЛЬКО на официальных назначенных спавнах (левый/правый фланг), а не посередине у моста.
+        if (room.GameMode == BattleGameMode.Defense && group == 0 && cfg.BotSpawns != null && cfg.BotSpawns.Length > 0)
+        {
+            int start = System.Threading.Interlocked.Increment(ref _defenderSpawnIdx);
+            int n = cfg.BotSpawns.Length;
+            for (int offset = 0; offset < n; offset++)
+            {
+                var pt = cfg.BotSpawns[((start + offset) % n + n) % n];
+                bool occupied = false;
+                foreach (var q in room.Players.Values)
+                {
+                    if (!q.IsDead && Distance2D(q.PosX, q.PosZ, pt.X, pt.Z) < 8.5f)
+                    {
+                        occupied = true;
+                        break;
+                    }
+                }
+                if (!occupied) return (pt.X, pt.Z);
+            }
+            var fallback = cfg.BotSpawns[((start % n) + n) % n];
+            return PickSpawnSpotNear(room, fallback.X, fallback.Z);
+        }
         var zone = group == 0 ? cfg.Team0 : cfg.Team1;
         return PickSpawnSpotNear(room, zone.XCenter, zone.ZCenter);
+    }
+
+    private float GetDefenderSpawnYaw(BattleRoom room, byte group, float spawnX)
+    {
+        if (room.GameMode == BattleGameMode.Defense && room.MapId == 30 && group == 0)
+            return spawnX < 290f ? 90f : 270f;
+        return GetSpawnYaw(room.MapId, group);
     }
 
     /// <summary>
@@ -2762,7 +2803,7 @@ public class RoomServer : GameServer
         // v13 (баг 6): точка спавна с гарантированным зазором 8 м от союзников.
         (player.PosX, player.PosZ) = PickSpawnSpot(room, group);
         player.PosY = GetSpawnY(group, room.MapId);
-        player.RotY = GetSpawnYaw(room.MapId, group);
+        player.RotY = GetDefenderSpawnYaw(room, group, player.PosX);
 
         var attrs = _gameTables.BuildTankAttributes(
             tankEntry != null ? _gameTables.WithEquippedModules(tankEntry, player.HullID, player.UnderpanID, player.TurretID,
@@ -2974,7 +3015,7 @@ public class RoomServer : GameServer
         }
         (player.PosX, player.PosZ) = PickSpawnSpot(room, player.Group);
         player.PosY = SampleHeight(room, player.PosX, player.PosZ);
-        player.RotY = GetSpawnYaw(room.MapId, player.Group);
+        player.RotY = GetDefenderSpawnYaw(room, player.Group, player.PosX);
         lock (room.StartLock) { room.PendingHumans.Remove(player); }
 
         // Keep team sizes capped (Defense = 6 defenders on Group 0, PvP = 7 per team) by replacing a bot.
@@ -3047,7 +3088,7 @@ public class RoomServer : GameServer
                     ph.Group = 0;
                     (ph.PosX, ph.PosZ) = PickSpawnSpot(room, ph.Group);
                     ph.PosY = GetSpawnY(ph.Group, room.MapId);
-                    ph.RotY = GetSpawnYaw(room.MapId, ph.Group);
+                    ph.RotY = GetDefenderSpawnYaw(room, ph.Group, ph.PosX);
                 }
             }
             else
@@ -4289,7 +4330,9 @@ public class RoomServer : GameServer
         bot.CurrentShellId     = _gameTables.GetGun(bot.MainGunID)?.Ammo1Id ?? 0;
         // Class-based combat profile + vision from this tank's real stats.
         bot.Profile     = BotCombatProfiles.Build(entry, _gameTables);
-        bot.Front       = ((int)(Math.Abs(guid) % 3) - 1) switch { -1 => BotFront.Left, 0 => BotFront.Center, _ => BotFront.Right };
+        // Preserve the Left/Right flank assigned from the chosen 2-spawn slot in Defense.
+        if (room.GameMode != BattleGameMode.Defense)
+            bot.Front   = ((int)(Math.Abs(guid) % 3) - 1) switch { -1 => BotFront.Left, 0 => BotFront.Center, _ => BotFront.Right };
         bot.Skill       = BotSkill.Roll(_random);
         bot.DetectRange = bot.Profile.DetectRange * BotSkill.ViewMult(bot.Skill);
         try
@@ -5583,8 +5626,8 @@ public class RoomServer : GameServer
                                             nearestEnemy.PosX, nearestEnemy.PosZ, nearestEnemy.PosY + 1f);
             if (hasShot) bot.LastLosTime = nowUtc;
 
-            bool tooClose = nearestEnemy != null && nearestDist < prof.StandoffRange;
-            bool recentlyHitBlind = nearestEnemy == null && (nowUtc - bot.LastHitTime).TotalSeconds < 4.0;
+            bool tooClose = !isDefenseAttacker && nearestEnemy != null && nearestDist < prof.StandoffRange;
+            bool recentlyHitBlind = !isDefenseAttacker && nearestEnemy == null && (nowUtc - bot.LastHitTime).TotalSeconds < 4.0;
 
             // Local overmatch check: when allies locally outnumber enemies, non-TDs push more confidently.
             bool localOvermatch = false;
@@ -5625,8 +5668,10 @@ public class RoomServer : GameServer
                                    && nearestEnemy != null && nearestDist < fireStopRange;
 
             // Sticky engagement (hysteresis) suspended cleanly while ducking to reload cover or blind fire.
+            // В Обороне атакующие боты НЕ останавливаются на месте и НЕ бегают искать игроков:
+            // они непрерывно наступают к мосту на базе защитников, отстреливаясь на ходу!
             bool engaged;
-            if (useReloadCover || useBlindCover || evasiveStrafing)
+            if (isDefenseAttacker || useReloadCover || useBlindCover || evasiveStrafing)
             {
                 engaged = false;
             }
@@ -5672,7 +5717,40 @@ public class RoomServer : GameServer
                     room, bot, mapCfg, botObstacles, isDefender, playerGroup);
             }
 
-            if (engaged)
+            if (isDefenseAttacker)
+            {
+                // Атакующие волны Обороны ВСЕГДА едут к цели прорыва (мост на спавне защитников),
+                // не отклоняясь на поиски игроков по всей карте. Сначала спускаются по своему
+                // флангу (левый X≈160 / правый X≈450), затем выходят напрямую на мост (290, 145).
+                var baseZone = playerGroup == 0 ? mapCfg.Team0 : mapCfg.Team1;
+                if (room.MapId == 30)
+                {
+                    if (bot.PosZ > 240f)
+                    {
+                        targetX = bot.Front == BotFront.Left ? 162f : 448f;
+                        targetZ = 215f;
+                    }
+                    else if (bot.PosZ > 175f)
+                    {
+                        // Подход к воротам перед мостом (открытый проём X≈270..290)
+                        targetX = 280f;
+                        targetZ = 165f;
+                    }
+                    else
+                    {
+                        // Прямой прорыв через мост на спавне защитников
+                        targetX = baseZone.XCenter;
+                        targetZ = baseZone.ZCenter;
+                    }
+                }
+                else
+                {
+                    targetX = baseZone.XCenter;
+                    targetZ = baseZone.ZCenter;
+                }
+                bot.TacticalState = BotTacticalState.AdvanceFront;
+            }
+            else if (engaged)
             {
                 targetX = bot.PosX; targetZ = bot.PosZ;
                 bot.TacticalState = BotTacticalState.FireHold;
@@ -5703,23 +5781,6 @@ public class RoomServer : GameServer
                 bot.TacticalState = ok && reloadLeft <= 2.2f
                     ? BotTacticalState.PeekOut
                     : (prof.Move == MovementStyle.Evasive ? BotTacticalState.FlankManoeuvre : BotTacticalState.AdvanceFront);
-            }
-            else if (isDefenseAttacker)
-            {
-                // Живых защитников не видно → продвигаемся по своему фронту к базе обороны.
-                if (bot.FrontStage < 2)
-                {
-                    targetX = bot.WaypointX;
-                    targetZ = bot.WaypointZ;
-                }
-                else
-                {
-                    var baseZone = playerGroup == 0 ? mapCfg.Team0 : mapCfg.Team1;
-                    float laneSpread = (int)bot.Front * 42f;
-                    targetX = baseZone.XCenter + laneSpread * 0.4f + bot.AssignedZOffset * 0.25f;
-                    targetZ = baseZone.ZCenter + laneSpread * 0.6f + bot.AssignedZOffset * 0.5f;
-                }
-                bot.TacticalState = BotTacticalState.AdvanceFront;
             }
             else if ((nowUtc - bot.LastSeenEnemyTime).TotalSeconds < 10.0
                      && Distance2D(bot.PosX, bot.PosZ, bot.LastSeenEnemyX, bot.LastSeenEnemyZ) > 10f)
@@ -5886,7 +5947,7 @@ public class RoomServer : GameServer
 
             // ── retreat / cover-back / smooth approach speed ──────────────────
             float retreatFrac = bot.IsCommander ? MathF.Max(prof.RetreatHpFrac, 0.45f) : prof.RetreatHpFrac;
-            bool retreating = hpFrac < retreatFrac;
+            bool retreating = !isDefenseAttacker && hpFrac < retreatFrac;
             float moveGoalDx = retreating ? -adjDx : adjDx;
             float moveGoalDz = retreating ? -adjDz : adjDz;
 
@@ -6204,11 +6265,13 @@ public class RoomServer : GameServer
                 ? (splitOnZ ? mapCfg.Team1.ZCenter : mapCfg.Team1.XCenter)
                 : (splitOnZ ? mapCfg.Team0.ZCenter : mapCfg.Team0.XCenter);
             float botAxisPos = splitOnZ ? bot.PosZ : bot.PosX;
-            float passZone   = mapCfg.Team0.XHalfSpread * 2f;
-            // Attacker begins on the far side; it broke through once it passes the base.
-            bool brokeThrough = attackerStart > defenderBase
-                ? botAxisPos < defenderBase + passZone
-                : botAxisPos > defenderBase - passZone;
+            float passZone   = room.MapId == 30 ? 12f : mapCfg.Team0.XHalfSpread * 2f;
+            // Attacker begins on the far side; it broke through once it actually crosses the bridge at defenderBase.
+            bool brokeThrough = room.MapId == 30
+                ? (bot.PosZ <= mapCfg.Team0.ZCenter + passZone && MathF.Abs(bot.PosX - mapCfg.Team0.XCenter) <= 95f)
+                : (attackerStart > defenderBase
+                    ? botAxisPos < defenderBase + passZone
+                    : botAxisPos > defenderBase - passZone);
             if (isDefenseAttacker && brokeThrough)
             {
                 room.EnemiesPassedThrough++;
@@ -6623,7 +6686,7 @@ public class RoomServer : GameServer
         float yawRad = move.RotY * (MathF.PI / 180f);
         float fwdX = MathF.Sin(yawRad);
         float fwdZ = MathF.Cos(yawRad);
-        bool contactTank = move.MoveState == 2 || move.MoveState == 3;
+        bool contactTankPressingInto = false;
         bool contactStatic = move.MoveState == 1;
         float pushCapMps = float.MaxValue;
 
@@ -6645,7 +6708,7 @@ public class RoomServer : GameServer
                 float toward = (ox / d) * moveDirX + (oz / d) * moveDirZ;
                 if (toward > 0.25f)
                 {
-                    contactTank = true;
+                    contactTankPressingInto = true;
                     float weightRatio = Math.Clamp((float)Math.Max(1, player.MaxHp) / Math.Max(1, other.MaxHp), 0.25f, 1.5f);
                     float cap = other.IsDead ? 0.6f : Math.Clamp(2.2f * weightRatio, 0.7f, 3.2f);
                     if (cap < pushCapMps) pushCapMps = cap;
@@ -6653,12 +6716,38 @@ public class RoomServer : GameServer
             }
         }
 
+        // Static wall / map border collision:
+        // ONLY damp speed when continuing to press INTO the obstacle; the instant the player
+        // reverses (e.g. presses S after driving into a house or map boundary), allow FULL
+        // reverse speed immediately with fast unstick acceleration (fixes 10-second freeze!).
+        bool staticBlockingMove = false;
         if (contactStatic)
         {
-            targetSpeed = Math.Clamp(targetSpeed, -0.5f, 0.5f);
-            player.CurrentSpeedMps *= 0.35f;
+            if (player.StaticCollideDirSign == 0)
+            {
+                player.StaticCollideDirSign = dirSign != 0
+                    ? dirSign
+                    : (player.CurrentSpeedMps > 0.2f ? 1 : player.CurrentSpeedMps < -0.2f ? -1 : 0);
+            }
+            if (dirSign != 0 && dirSign == player.StaticCollideDirSign)
+            {
+                staticBlockingMove = true;
+                targetSpeed = 0f;
+                player.CurrentSpeedMps *= 0.25f;
+            }
+            else if (dirSign != 0 && dirSign == -player.StaticCollideDirSign)
+            {
+                // Player is reversing out of the wall/border — immediately unstick at full speed!
+                if (MathF.Sign(player.CurrentSpeedMps) == player.StaticCollideDirSign)
+                    player.CurrentSpeedMps = 0f;
+            }
         }
-        else if (contactTank)
+        else
+        {
+            player.StaticCollideDirSign = 0;
+        }
+
+        if (!staticBlockingMove && contactTankPressingInto)
         {
             float cap = pushCapMps < float.MaxValue ? pushCapMps : 2.2f;
             targetSpeed = Math.Clamp(targetSpeed, -cap, cap);
@@ -6672,8 +6761,10 @@ public class RoomServer : GameServer
         float dt   = Math.Clamp(rawDt, 0f, 0.5f);
         player.LastDictateTime = now;
 
+        bool backingOutOfWall = contactStatic && dirSign != 0 && dirSign == -player.StaticCollideDirSign;
         float accelDist = MathF.Abs(targetSpeed) > 0.01f ? MathF.Abs(targetSpeed) : player.MaxForwardSpeedMps;
-        float accelTime = (contactTank || contactStatic) ? 0.45f
+        float accelTime = backingOutOfWall ? 0.35f
+                        : (contactTankPressingInto || staticBlockingMove) ? 0.45f
                         : (MathF.Abs(targetSpeed) > 0.01f ? 3.0f : 1.0f);
         float accel     = MathF.Max(1f, accelDist) / accelTime;
         if (player.CurrentSpeedMps < targetSpeed)
@@ -8258,8 +8349,9 @@ public class RoomServer : GameServer
                         target.CurHp           = target.MaxHp;
                         (target.PosX, target.PosZ) = PickSpawnSpot(room, target.Group); // v13
                         target.PosY            = SampleHeight(room, target.PosX, target.PosZ);
-                        target.RotY            = GetSpawnYaw(room.MapId, target.Group);
+                        target.RotY            = GetDefenderSpawnYaw(room, target.Group, target.PosX);
                         target.CurrentSpeedMps = 0f;
+                        target.StaticCollideDirSign = 0;
                         // v12: свежий танк — целые гусеницы и модули, пожар потушен,
                         // засвет сброшен (заново «скрыт» на точке возрождения).
                         target.ChassisLDamaged = false;
@@ -8339,7 +8431,7 @@ public class RoomServer : GameServer
                         var (rsx, rsz) = PickSpawnSpot(room, deadBot.Group);
                         deadBot.PosX = rsx; deadBot.PosZ = rsz;
                         deadBot.PosY = SampleHeight(room, rsx, rsz);
-                        deadBot.LastYaw = GetSpawnYaw(room.MapId, deadBot.Group);
+                        deadBot.LastYaw = GetDefenderSpawnYaw(room, deadBot.Group, rsx);
                         var rgun = _gameTables.GetGun(deadBot.MainGunID);
                         deadBot.ShellCount = Math.Max(1, rgun?.AmmoLoad ?? 20);
 
@@ -9230,6 +9322,7 @@ public class RoomPlayer
     public int      FreeKatyushaLeft   { get; set; } = 1;
     public DateTime KatyushaCdUntil    { get; set; }
     public DateTime BomberCdUntil      { get; set; }
+    public int      StaticCollideDirSign { get; set; }
     public object   CrashLock          { get; } = new();
     public Dictionary<long, DateTime> LastCrashTimeByTarget { get; } = new();
     public int      ReviveCount        { get; set; }   // возрождений
