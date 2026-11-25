@@ -1610,6 +1610,38 @@ public class PK_HC_PVEBeginQueueWait : BaseRequest
     }
 }
 
+[MessagePortal(TkMsgType.NM_HC_UpdateWaitingInfo)]
+public class PK_HC_UpdateWaitingInfo : BaseRequest
+{
+    public byte CurrentCount;
+    public byte TotalCount = 6;
+
+    public PK_HC_UpdateWaitingInfo() => MsgType = TkMsgType.NM_HC_UpdateWaitingInfo;
+
+    public override void WriteByte(ByteArray ba)
+    {
+        ba.WriteByte(CurrentCount);
+        ba.WriteByte(TotalCount);
+    }
+}
+
+[MessagePortal(TkMsgType.NM_HC_PVEFreshWaitingBattle)]
+public class PK_HC_PVEFreshWaitingBattle : BaseRequest
+{
+    public int TotalCount;
+    public ushort[] BattleLevelCount = new ushort[5];
+    public ushort[] TankLevelCount = new ushort[11];
+
+    public PK_HC_PVEFreshWaitingBattle() => MsgType = TkMsgType.NM_HC_PVEFreshWaitingBattle;
+
+    public override void WriteByte(ByteArray ba)
+    {
+        ba.WriteInt(TotalCount);
+        for (int i = 0; i < 5; i++) ba.WriteUShort(i < BattleLevelCount.Length ? BattleLevelCount[i] : (ushort)0);
+        for (int i = 0; i < 11; i++) ba.WriteUShort(i < TankLevelCount.Length ? TankLevelCount[i] : (ushort)0);
+    }
+}
+
 // v16 (баг 3): вкладка «РЕЗУЛЬТАТ КОМАНДЫ» в окне «Статистика боя» (id 231).
 // Клиент: GroupStatisticsDataManager.OnSynTeamResultDataHandler. Раньше не слалось
 // вообще — отсюда пустая таблица.

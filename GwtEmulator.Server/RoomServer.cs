@@ -2871,20 +2871,42 @@ public class RoomServer : GameServer
             FastChangeShell        = player.FastChangeShell,
         };
         // ── Hot-join: battle already running → add this player live ─────────
-        // (Host started solo; a 2nd player picked the same mode and joined.)
+        // (Host/earlier group already entered; late friend picked the same mode and joined.)
         if (room.BattleStarted && !room.BattleEnded)
         {
             Console.WriteLine($"[RS] Hot-join: {login.PlayerGUID} into running room {room.RoomGUID}");
             var existingHuman = room.Players.Values.FirstOrDefault(p => !p.IsBot && p.PlayerGUID != player.PlayerGUID);
-            // Put the joiner on the opposite team for PvP, same team for Defense (co-op)
+            // Put the joiner on the opposite team for PvP, same team (Group 0) for Defense (co-op)
             player.Group = mode == BattleGameMode.Defense || existingHuman == null
-                ? (existingHuman?.Group ?? (byte)0)
+                ? (byte)0
                 : (byte)(1 - existingHuman.Group);
             (player.PosX, player.PosZ) = PickSpawnSpot(room, player.Group);
             player.PosY = GetSpawnY(player.Group, room.MapId);
             player.RotY = GetSpawnYaw(room.MapId, player.Group);
             room.PendingHumans.Remove(player);
+
+            // Defense has strictly 6 defenders (Team 0): replace an ally bot when a human hot-joins!
+            if (mode == BattleGameMode.Defense)
+            {
+                while (room.Players.Values.Count(p => p.Group == 0) > 6)
+                {
+                    var allyBot = room.Players.Values.FirstOrDefault(p => p.IsBot && p.Group == 0);
+                    if (allyBot == null) break;
+                    DespawnWaveBot(room, allyBot);
+                }
+            }
+
             SendLoginSuccessForPlayer(player, room, mode, littleBattleMode, warModel);
+            // Sync active wave counter/enemy count if Defense wave already rolled
+            if (mode == BattleGameMode.Defense && room.CurrentWave > 0)
+            {
+                try
+                {
+                    player.Session.Send(new PK_RC_PVE_RoundBegin { ReadyTime = 0, CurRound = room.CurrentWave, CurRoundCD = 0 });
+                    player.Session.Send(new PK_RC_PVE_Enemy { CurEnemyNum = room.CurrentWaveEnemies });
+                }
+                catch { }
+            }
             // Tell existing humans about the newcomer via NewPlayerLogin (spawns live tank without resetting battle)
             BroadcastToOthers(room, player.PlayerGUID, new PK_RC_NewPlayerLogin
             {
@@ -2893,26 +2915,73 @@ public class RoomServer : GameServer
             return;
         }
 
-        // ── Multiplayer: wait for all expected players ──────────────────────
-        room.ExpectedHumanCount = BattleModeRegistry.GetExpectedPlayers(room.RoomGUID);
-        room.PendingHumans.Add(player);
-
-        if (room.PendingHumans.Count < room.ExpectedHumanCount)
+        // ── Multiplayer: wait for all expected players (with 15s anti-hang timeout) ──
+        bool shouldStartNow = false;
+        lock (room.StartLock)
         {
-            Console.WriteLine($"[RS] Room {room.RoomGUID}: {room.PendingHumans.Count}/{room.ExpectedHumanCount} players — waiting for partner...");
+            if (room.BattleStarted || room.BattleEnded) return;
+            room.ExpectedHumanCount = Math.Max(1, BattleModeRegistry.GetExpectedPlayers(room.RoomGUID));
+            if (!room.PendingHumans.Contains(player))
+                room.PendingHumans.Add(player);
             room.DeferredStartParams = (littleBattleMode, warModel, mode);
-            return;
+
+            if (room.PendingHumans.Count >= room.ExpectedHumanCount)
+            {
+                shouldStartNow = true;
+            }
+            else if (!room.DeferredWaitStarted)
+            {
+                room.DeferredWaitStarted = true;
+                Console.WriteLine($"[RS] Room {room.RoomGUID}: {room.PendingHumans.Count}/{room.ExpectedHumanCount} players — waiting up to 15s for remaining players...");
+                _ = Task.Run(async () =>
+                {
+                    await Task.Delay(15_000);
+                    bool forceStart = false;
+                    (byte lm, byte wm, BattleGameMode gm) p = default;
+                    lock (room.StartLock)
+                    {
+                        if (!room.BattleStarted && !room.BattleEnded && room.PendingHumans.Count > 0 && room.DeferredStartParams.HasValue)
+                        {
+                            room.ExpectedHumanCount = room.PendingHumans.Count;
+                            p = room.DeferredStartParams.Value;
+                            forceStart = true;
+                        }
+                    }
+                    if (forceStart)
+                    {
+                        Console.WriteLine($"[RS] Room {room.RoomGUID}: 15s wait timeout -> starting with {room.PendingHumans.Count} connected player(s)");
+                        StartPendingRoom(room, p.lm, p.wm, p.gm);
+                    }
+                });
+            }
         }
 
+        if (!shouldStartNow) return;
+        StartPendingRoom(room, littleBattleMode, warModel, mode);
+    }
+
+    private void StartPendingRoom(BattleRoom room, byte littleBattleMode, byte warModel, BattleGameMode mode)
+    {
+        List<RoomPlayer> humansSnapshot;
+        lock (room.StartLock)
+        {
+            if (room.BattleStarted || room.BattleEnded || room.PendingHumans.Count == 0) return;
+            humansSnapshot = room.PendingHumans.ToList();
+        }
+
+        var firstHuman = humansSnapshot[0];
+        var tank       = _tankRepo.GetPlayerTanks(firstHuman.PlayerGUID).FirstOrDefault(t => t.TankGUID == firstHuman.TankGUID);
+        var tankEntry  = tank != null ? _gameTables.GetTank(tank.VehicleId) : null;
+        var session    = firstHuman.Session;
         bool isDefenseRoom = mode == BattleGameMode.Defense;
 
-        // Balance teams & refresh spawns BEFORE spawning bots so both players start cleanly
-        if (room.PendingHumans.Count > 1)
+        // Balance teams & refresh spawns BEFORE spawning bots so all players start cleanly
+        if (humansSnapshot.Count > 1)
         {
-            byte firstGroup = isDefenseRoom ? (byte)0 : room.PendingHumans[0].Group;
-            for (int hi = 0; hi < room.PendingHumans.Count; hi++)
+            byte firstGroup = isDefenseRoom ? (byte)0 : humansSnapshot[0].Group;
+            for (int hi = 0; hi < humansSnapshot.Count; hi++)
             {
-                var ph = room.PendingHumans[hi];
+                var ph = humansSnapshot[hi];
                 ph.Group = isDefenseRoom ? (byte)0 : (byte)((firstGroup + hi) % 2);
                 (ph.PosX, ph.PosZ) = PickSpawnSpot(room, ph.Group);
                 ph.PosY = GetSpawnY(ph.Group, room.MapId);
@@ -2923,12 +2992,12 @@ public class RoomServer : GameServer
         // ── spawn bots BEFORE sending TankBattleData to humans ──────────────
         int humansOn0 = room.Players.Values.Count(p => !p.IsBot && p.Group == 0);
         int humansOn1 = room.Players.Values.Count(p => !p.IsBot && p.Group == 1);
-        int botsOnGroup0 = isDefenseRoom ? Math.Max(1, 6 - humansOn0) : Math.Max(0, 7 - humansOn0);
+        int botsOnGroup0 = isDefenseRoom ? Math.Max(0, 6 - humansOn0) : Math.Max(0, 7 - humansOn0);
         int botsOnGroup1 = isDefenseRoom ? 0 : Math.Max(0, 7 - humansOn1);
         int botsOnPlayerTeam = botsOnGroup0;
         int botsOnOtherTeam  = botsOnGroup1;
         int totalBots        = botsOnPlayerTeam + botsOnOtherTeam;
-        group = 0;
+        byte group = 0;
 
         var fallbackBotTank = _gameTables.GetTank(81);
         // v48.5: одно ОКНО уровней на весь бой (разброс ≤ 2, содержит уровень игрока).
@@ -2948,8 +3017,8 @@ public class RoomServer : GameServer
         // комнате (для мультиплеера это может быть 2 разных танка/уровня).
         if (isDefenseRoom)
         {
-            var allyTiers = room.PendingHumans.Count > 0
-                ? room.PendingHumans.Select(p => (int)p.Tier).ToList()
+            var allyTiers = humansSnapshot.Count > 0
+                ? humansSnapshot.Select(p => (int)p.Tier).ToList()
                 : new List<int> { tankEntry?.Tier ?? 1 };
             int allyMin = allyTiers.Min();
             int allyMax = allyTiers.Max();
@@ -2974,7 +3043,7 @@ public class RoomServer : GameServer
         // «второй T-55»), т.е. клиент не рендерит второй танк с той же моделью → он невидим.
         // Поэтому подбираем ботам УНИКАЛЬНЫЕ танки (в пределах окна тира), не дублируя и танк игрока.
         var usedBotTankIds = new HashSet<int>();
-        foreach (var hp in room.PendingHumans)
+        foreach (var hp in humansSnapshot)
             if (hp.VehicleId > 0) usedBotTankIds.Add(hp.VehicleId);
 
         for (int b = 0; b < totalBots; b++)
@@ -3084,7 +3153,7 @@ public class RoomServer : GameServer
                 Group          = botGroup,
                 TankID         = (ushort)(botTankEntry?.Id ?? 81),
                 Tier           = (byte)(botTankEntry?.Tier ?? 1),
-                BattleRoomGUID = login.RoomGUID,
+                BattleRoomGUID = room.RoomGUID,
                 IsBot          = true, IsLoaded = true,
                 Role           = role,
                 AssignedZOffset = ZOffset(teamIdx, teamSize),
@@ -3121,14 +3190,13 @@ public class RoomServer : GameServer
                                   $"(X={botSpawnX:F0} Z={botSpawnZ:F0}) = terrain+1.5. If bots FLY in-game while this " +
                                   $"stays low, the CLIENT (a patched Assembly-CSharp.dll) is adding the height, not the server.");
         }
-        Console.WriteLine($"[RS] Added {totalBots} bots to room {login.RoomGUID}");
+        Console.WriteLine($"[RS] Added {totalBots} bots to room {room.RoomGUID}");
         Console.WriteLine($"[RS] v48 задача 5: случайную башню/орудие получили {botsRandomized} из {totalBots} ботов");
 
         // Send full startup sequence (LoginSuccess + SceneInfo + PlayerList + TankBattleData +
         // Countdown + Score + HideEnemies + PVE init) to ALL waiting humans now that all bots exist.
-        var humansToEnter = room.PendingHumans.ToList();
-        room.PendingHumans.Clear();
-        foreach (var ph in humansToEnter)
+        lock (room.StartLock) { room.PendingHumans.Clear(); }
+        foreach (var ph in humansSnapshot)
         {
             SendLoginSuccessForPlayer(ph, room, mode, littleBattleMode, warModel);
         }
@@ -3563,10 +3631,10 @@ public class RoomServer : GameServer
                 CurSliver               = 0,
                 CurGold                 = 0,
                 CurSkillCoin            = 0,
-                CurFreeSkillOfBomber    = 1,
-                CurFreeSkillOfKatyusha  = 1,
+                CurFreeSkillOfBomber    = ph.FreeBomberLeft,
+                CurFreeSkillOfKatyusha  = ph.FreeKatyushaLeft,
                 TotalRound              = BattleRoom.PveTotalRounds,
-                LimitEnemyNum           = BattleRoom.PveEnemiesPerWave,
+                LimitEnemyNum           = PveWaveTanks[0].Length,
                 InitLife                = BattleRoom.PveInitLives,
                 LimitScore              = 10000,
                 KatyushaRadius          = 80,
@@ -3650,7 +3718,16 @@ public class RoomServer : GameServer
                     int gainSp = (int)MathF.Round(500 * p.PveSpBonusMult);
                     p.Sp += gainSp;
                     p.SpEarned += gainSp;  // v12: «заработано очков» для статистики
-                    try { p.Session.Send(new PK_RC_PVE_Cost { CurScore = p.Sp, CurSkillCoin = p.Sp }); }
+                    try
+                    {
+                        p.Session.Send(new PK_RC_PVE_Cost
+                        {
+                            CurScore = p.Score,
+                            CurSkillCoin = p.Sp,
+                            CurFreeSkillOfBomber = p.FreeBomberLeft,
+                            CurFreeSkillOfKatyusha = p.FreeKatyushaLeft,
+                        });
+                    }
                     catch { /* disconnected */ }
                 }
             }
@@ -3798,8 +3875,10 @@ public class RoomServer : GameServer
             return;
         }
 
-        // EXECUTE (IsExecute>0): enforce the SP cost.
-        if (caster.Sp < cost)
+        // EXECUTE (IsExecute>0): enforce SP cost (or consume free Bomber/Katyusha charge).
+        bool usedFreeBomber = req.CostType == 5 && skill == 6 && caster.FreeBomberLeft > 0;
+        bool usedFreeKatyusha = req.CostType == 6 && skill == 5 && caster.FreeKatyushaLeft > 0;
+        if (!usedFreeBomber && !usedFreeKatyusha && caster.Sp < cost)
         {
             session.Send(new PK_RC_PVE_SkillReply
             {
@@ -3813,10 +3892,21 @@ public class RoomServer : GameServer
             IsExecute = req.IsExecute, SkillID = req.SkillID,
             RequestResult = 1 /* OK */, CostType = req.CostType, fParam1 = req.Parameter1,
         });
-        caster.Sp = Math.Max(0, caster.Sp - cost);
-        caster.SpSpent += cost;                                     // v12: «потрачено очков»
+        if (usedFreeBomber) caster.FreeBomberLeft--;
+        else if (usedFreeKatyusha) caster.FreeKatyushaLeft--;
+        else
+        {
+            caster.Sp = Math.Max(0, caster.Sp - cost);
+            caster.SpSpent += cost;                                     // v12: «потрачено очков»
+        }
         if (skill >= 1 && skill <= 7) caster.SkillUseCount[skill]++; // v12: счётчик применений
-        session.Send(new PK_RC_PVE_Cost { CurScore = caster.Sp, CurSkillCoin = caster.Sp });
+        session.Send(new PK_RC_PVE_Cost
+        {
+            CurScore = caster.Score,
+            CurSkillCoin = caster.Sp,
+            CurFreeSkillOfBomber = caster.FreeBomberLeft,
+            CurFreeSkillOfKatyusha = caster.FreeKatyushaLeft,
+        });
 
         var vec = new[] { req.Parameter1, req.Parameter2, req.Parameter3 };
         BroadcastToRoom(room, new PK_RC_PVE_SkillBroadcast
@@ -7424,8 +7514,6 @@ public class RoomServer : GameServer
             int killSp = (int)MathF.Round(500 * attacker.PveSpBonusMult);
             attacker.Sp += killSp;
             attacker.SpEarned += killSp;  // v12: статистика
-            if (!attacker.IsBot)
-                attacker.Session.Send(new PK_RC_PVE_Cost { CurScore = attacker.Sp, CurSkillCoin = attacker.Sp });
             // Defense mode: count attacker kills for wave quota
             if (room.GameMode == BattleGameMode.Defense && target.IsBot && target.Group != attacker.Group)
                 room.WaveKillCount++;  // enemy wave bot killed
@@ -7439,6 +7527,17 @@ public class RoomServer : GameServer
             const int killPoints = 100;
             attacker.Score += 500 + damage;
 
+            if (!attacker.IsBot)
+            {
+                attacker.Session.Send(new PK_RC_PVE_Cost
+                {
+                    CurScore = attacker.Score,
+                    CurSkillCoin = attacker.Sp,
+                    CurFreeSkillOfBomber = attacker.FreeBomberLeft,
+                    CurFreeSkillOfKatyusha = attacker.FreeKatyushaLeft,
+                });
+            }
+
             // Team score only in Respawn mode; other modes track kills for win condition.
             if (room.GameMode == BattleGameMode.Respawn)
             {
@@ -7447,10 +7546,6 @@ public class RoomServer : GameServer
             }
 
             // Update top-screen kill-count bars (Наши / Противник).
-            // GoodDestroyCount = kills by the RECEIVER's team (from each player's POV, "our" team).
-            // We broadcast a single shared packet; the client assigns bars based on its own group.
-            // Convention: Team1 (group 0) kills → GoodDestroyCount for group 0 players.
-            // We approximate by using room Team1/Team2 kill tallies.
             int t1kills = room.Players.Values.Where(p => p.Group == 0 && !p.IsBot).Sum(p => p.KillCount)
                         + room.Players.Values.Where(p => p.Group == 0 && p.IsBot).Sum(p => p.KillCount);
             int t2kills = room.Players.Values.Where(p => p.Group == 1 && !p.IsBot).Sum(p => p.KillCount)
@@ -7465,7 +7560,10 @@ public class RoomServer : GameServer
                                    (ushort)Math.Min(ushort.MaxValue, pp.TotalDamage)))
                     .ToArray(),
             });
-            BroadcastToRoom(room, new PK_RC_Score { Score = attacker.Group == 0 ? room.Team1Score : room.Team2Score });
+            if (room.GameMode == BattleGameMode.Respawn)
+            {
+                BroadcastToRoom(room, new PK_RC_Score { Score = attacker.Group == 0 ? room.Team1Score : room.Team2Score });
+            }
             // v48.9: шлём очки ВСЕХ игроков, а не только убившего. Раньше слали один entry
             // (killer) — клиент перестраивал таблицу по этому пакету, поэтому у остальных (и
             // часто у самого игрока) очки обнулялись, и игрок «прыгал» в самый низ списка.
@@ -7770,6 +7868,12 @@ public class RoomServer : GameServer
                                        (ushort)Math.Min(ushort.MaxValue, pp.TotalDamage)))
                         .ToArray(),
                 });
+                BroadcastToRoom(room, new PK_RC_PlayerScore
+                {
+                    Players = room.Players.Values
+                        .Select(pp => new PlayerScoreEntry { PlayerGUID = pp.PlayerGUID, Score = pp.Score })
+                        .ToArray(),
+                });
             }
             catch { }
         }
@@ -7987,7 +8091,7 @@ public class RoomServer : GameServer
                                  (byte)(wasSpotted ? 1 : 0), 0, 0, 0));
             }
             // PVE-массив (оборона) — раскладка по клиентскому enum PVEEndInfo.
-            pkg.PveInfo[0]  = room.GameMode == BattleGameMode.Defense ? room.CurrentWave : 0; // отражено волн
+            pkg.PveInfo[0]  = p.KillCount; // ERT_PVE_StopKillCount: остановлено врагов
             pkg.PveInfo[1]  = p.DeathCount;
             pkg.PveInfo[2]  = p.SpEarned;
             pkg.PveInfo[3]  = p.SpSpent;
@@ -8083,14 +8187,30 @@ public class RoomServer : GameServer
     {
         if (_players.TryRemove(session.PlayerGUID, out var player) && player.Room != null)
         {
-            player.Room.PendingHumans.Remove(player);
-            player.Room.Players.TryRemove(session.PlayerGUID, out _);
-            bool anyHumansLeft = player.Room.Players.Values.Any(p => !p.IsBot);
-            if (!anyHumansLeft && player.Room.BattleStarted && !player.Room.BattleEnded)
-                EndBattle(player.Room);
-            else if (!anyHumansLeft && !player.Room.BattleStarted)
-                BattleModeRegistry.MarkEnded(player.Room.RoomGUID);
-            BroadcastToRoom(player.Room, new PK_RC_PlayerLogout { PlayerGUID = session.PlayerGUID });
+            var room = player.Room;
+            bool startNow = false;
+            (byte lm, byte wm, BattleGameMode gm) p = default;
+            lock (room.StartLock)
+            {
+                room.PendingHumans.Remove(player);
+                room.Players.TryRemove(session.PlayerGUID, out _);
+                if (!room.BattleStarted && !room.BattleEnded && room.PendingHumans.Count > 0)
+                {
+                    room.ExpectedHumanCount = Math.Min(room.ExpectedHumanCount, room.PendingHumans.Count);
+                    if (room.DeferredStartParams.HasValue && room.PendingHumans.Count >= room.ExpectedHumanCount)
+                    {
+                        p = room.DeferredStartParams.Value;
+                        startNow = true;
+                    }
+                }
+            }
+            bool anyHumansLeft = room.Players.Values.Any(x => !x.IsBot);
+            if (!anyHumansLeft && room.BattleStarted && !room.BattleEnded)
+                EndBattle(room);
+            else if (!anyHumansLeft && !room.BattleStarted)
+                BattleModeRegistry.MarkEnded(room.RoomGUID);
+            BroadcastToRoom(room, new PK_RC_PlayerLogout { PlayerGUID = session.PlayerGUID });
+            if (startNow) StartPendingRoom(room, p.lm, p.wm, p.gm);
         }
         Console.WriteLine($"[RS] Player logout: {session.PlayerGUID}");
     }
@@ -8241,13 +8361,29 @@ public class RoomServer : GameServer
         {
             if (player.Room != null)
             {
-                player.Room.PendingHumans.Remove(player);
-                player.Room.Players.TryRemove(session.PlayerGUID, out _);
-                bool anyHumansLeft = player.Room.Players.Values.Any(p => !p.IsBot);
-                if (!anyHumansLeft && player.Room.BattleStarted && !player.Room.BattleEnded)
-                    EndBattle(player.Room);
-                else if (!anyHumansLeft && !player.Room.BattleStarted)
-                    BattleModeRegistry.MarkEnded(player.Room.RoomGUID);
+                var room = player.Room;
+                bool startNow = false;
+                (byte lm, byte wm, BattleGameMode gm) p = default;
+                lock (room.StartLock)
+                {
+                    room.PendingHumans.Remove(player);
+                    room.Players.TryRemove(session.PlayerGUID, out _);
+                    if (!room.BattleStarted && !room.BattleEnded && room.PendingHumans.Count > 0)
+                    {
+                        room.ExpectedHumanCount = Math.Min(room.ExpectedHumanCount, room.PendingHumans.Count);
+                        if (room.DeferredStartParams.HasValue && room.PendingHumans.Count >= room.ExpectedHumanCount)
+                        {
+                            p = room.DeferredStartParams.Value;
+                            startNow = true;
+                        }
+                    }
+                }
+                bool anyHumansLeft = room.Players.Values.Any(x => !x.IsBot);
+                if (!anyHumansLeft && room.BattleStarted && !room.BattleEnded)
+                    EndBattle(room);
+                else if (!anyHumansLeft && !room.BattleStarted)
+                    BattleModeRegistry.MarkEnded(room.RoomGUID);
+                if (startNow) StartPendingRoom(room, p.lm, p.wm, p.gm);
             }
         }
     }
@@ -8323,6 +8459,8 @@ public class BattleRoom
     public DateTime NextBotYLog { get; set; }
     public const float HeightCellSize = 40f; // world units per grid cell
 
+    public object           StartLock            { get; } = new();
+    public bool             DeferredWaitStarted  { get; set; }
     public int              ExpectedHumanCount   { get; set; } = 1;
     /// <summary>Humans who have sent NM_CR_PlayerLogin but haven't received success yet.</summary>
     public List<RoomPlayer> PendingHumans        { get; } = new();
@@ -8342,7 +8480,7 @@ public class BattleRoom
 
     // PVE constants
     public const int PveTotalRounds   = 12;
-    public const int PveEnemiesPerWave = 30;   // 30 enemy tanks per wave (user request)
+    public const int PveEnemiesPerWave = 6;    // 6 enemy tanks per wave (matches PveWaveTanks)
     public const int PveInitLives      = 6;   // how many break-throughs allowed
     public const int CommanderHpMultiple = 3; // Generals: general gets x3 durability
     public bool CommanderStarted { get; set; }
@@ -8473,6 +8611,8 @@ public class RoomPlayer
     public int      OccupyValue        { get; set; }   // очки захвата
     public int      SpEarned           { get; set; }   // заработано очков (SP)
     public int      SpSpent            { get; set; }   // потрачено очков (SP)
+    public int      FreeBomberLeft     { get; set; } = 1;
+    public int      FreeKatyushaLeft   { get; set; } = 1;
     public int      ReviveCount        { get; set; }   // возрождений
     public int[]    SkillUseCount      { get; } = new int[8]; // индекс = базовый id скилла 1..7
     public HashSet<long> DamagedEnemyGuids { get; } = new(); // «повреждено врагов»

@@ -17,6 +17,7 @@ public class DatabaseService : IDisposable
     }
 
     public SqliteConnection Connection => _connection;
+    public object SyncRoot { get; } = new();
 
     private void InitializeTables()
     {

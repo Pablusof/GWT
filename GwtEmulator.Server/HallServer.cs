@@ -39,12 +39,19 @@ public class HallServer : GameServer
         public DateTime QueuedAt { get; init; } = DateTime.UtcNow;
     }
 
-    // Waiting player per normalized mode (before RoomServer) + active open rooms for hot-join.
-    private static readonly Dictionary<byte, MatchEntry> _waitingMatch       = new();
-    private static readonly Dictionary<byte, MatchEntry> _activeRoomsByMode  = new();
+    private sealed class MatchLobby
+    {
+        public required long RoomGuid { get; init; }
+        public required byte NormMode { get; init; }
+        public required CancellationTokenSource WaitCts { get; init; }
+        public List<MatchEntry> Entries { get; } = new();
+    }
+
+    // Waiting lobby per normalized mode (collects all players queueing within 20s) + active open rooms for hot-join.
+    private static readonly Dictionary<byte, MatchLobby>  _waitingLobbies    = new();
+    private static readonly Dictionary<byte, MatchEntry>  _activeRoomsByMode = new();
     private static readonly object                        _matchLock         = new();
-    // v12: игроки, нажавшие «ВЫХОД» на экране «Подбор команды» до конца 5-секундного
-    // ожидания — их отложенный JoinRoomRes отменяется.
+    // v12: игроки, нажавшие «ВЫХОД» на экране «Подбор команды» — их отложенный JoinRoomRes отменяется.
     private static readonly HashSet<long>                 _queueCancelled = new();
     // v13: холл-сессии по GUID — RoomServer шлёт через них окно «Статистика боя»
     // СРАЗУ при конце боя, пока клиент ещё в сцене Room (иначе окно не открывается:
@@ -1539,8 +1546,10 @@ public class HallServer : GameServer
     // клиент залогирует ошибку и не выставит режим — поэтому оборона идёт как
     // раньше, без экрана (её очередь в оригинале — отдельный PVE-экран).
     private const int QueueScreenSec = 5;
-    private const int CoopOnlineWaitSec = 60;
+    private const int MatchSearchWaitSec = 20;
     private const int CoopFoundDelayMs = 1500;
+    private const int DefenseTeamCap = 6;
+    private const int PvpRoomCap = 14;
 
     // v13 (баг 9): тир выбранного танка для честных цифр экрана подбора.
     private int GetQueueTier(long tankGuid)
@@ -1580,12 +1589,13 @@ public class HallServer : GameServer
             session.Send(new PK_HC_PVEBeginQueueWait
             {
                 Success           = 1,
-                CurrentCount      = (byte)Math.Clamp(curHumans, 0, 255),
-                TotalCount        = (byte)Math.Clamp(Math.Max(curHumans, targetHumansForPve), 1, 255),
+                CurrentCount      = (byte)Math.Clamp(curHumans, 0, DefenseTeamCap),
+                TotalCount        = (byte)Math.Max(DefenseTeamCap, targetHumansForPve),
                 TotalWaitingCount = curHumans,
                 TankLevelCount    = pveTanks,
                 BattleLevelCount  = pveBattle,
-                BattleMode        = wireMode,
+                // CommonTools.ConvertModeFromServer(5) == 4 (EBattleMode.PVE); 4 maps to 3!
+                BattleMode        = 5,
             });
             return;
         }
@@ -1609,6 +1619,59 @@ public class HallServer : GameServer
             RoomCounts   = rooms,
             BattleMode   = wireMode,
         });
+    }
+
+    private void BroadcastLobbyUpdatesLocked(MatchLobby lobby, int activeRoomCount, long? excludePlayerGuid = null)
+    {
+        var tiers = lobby.Entries.Select(e => e.Tier).ToList();
+        if (tiers.Count == 0) return;
+
+        if (lobby.NormMode == 4)
+        {
+            var pveTanks = new ushort[11];
+            foreach (var tier in tiers)
+            {
+                int idx = Math.Clamp(tier, 1, 11) - 1;
+                pveTanks[idx]++;
+            }
+            var pveBattle = new ushort[5];
+            pveBattle[0] = (ushort)Math.Max(1, activeRoomCount);
+            byte cur = (byte)Math.Clamp(tiers.Count, 0, DefenseTeamCap);
+
+            foreach (var entry in lobby.Entries)
+            {
+                if (excludePlayerGuid.HasValue && entry.PlayerGuid == excludePlayerGuid.Value) continue;
+                if (!entry.Session.IsConnected) continue;
+                try
+                {
+                    entry.Session.Send(new PK_HC_UpdateWaitingInfo
+                    {
+                        CurrentCount = cur,
+                        TotalCount   = DefenseTeamCap,
+                    });
+                    entry.Session.Send(new PK_HC_PVEFreshWaitingBattle
+                    {
+                        TotalCount       = tiers.Count,
+                        BattleLevelCount = pveBattle,
+                        TankLevelCount   = pveTanks,
+                    });
+                }
+                catch { }
+            }
+        }
+        else
+        {
+            foreach (var entry in lobby.Entries)
+            {
+                if (excludePlayerGuid.HasValue && entry.PlayerGuid == excludePlayerGuid.Value) continue;
+                if (!entry.Session.IsConnected) continue;
+                try
+                {
+                    SendQueueSnapshot(entry.Session, entry.WireMode, entry.Tier, tiers, activeRoomCount, tiers.Count);
+                }
+                catch { }
+            }
+        }
     }
 
     private void SendQueueScreenThenJoin(GameSession session, byte wireMode, int playerTier, PK_HC_JoinRoomRes res, int delaySec = QueueScreenSec, IReadOnlyList<int>? humanTiers = null)
@@ -1644,93 +1707,71 @@ public class HallServer : GameServer
     {
         byte normMode = NormalizeMatchMode(mode);
         int myTier = GetQueueTier(tankGuid);
+        int maxHumansInMode = normMode == 4 ? DefenseTeamCap : PvpRoomCap;
 
         lock (_matchLock)
         {
             _queueCancelled.Remove(session.PlayerGUID);
 
-            // Prune disconnected / cancelled waiting entries
-            var deadWait = _waitingMatch
-                .Where(kv => !kv.Value.Session.IsConnected || _queueCancelled.Contains(kv.Value.PlayerGuid))
-                .Select(kv => kv.Key)
-                .ToList();
-            foreach (var k in deadWait)
+            var emptyLobbies = new List<byte>();
+            foreach (var kv in _waitingLobbies)
             {
-                if (_waitingMatch.Remove(k, out var w)) w.WaitCts?.Cancel();
+                kv.Value.Entries.RemoveAll(e => !e.Session.IsConnected || _queueCancelled.Contains(e.PlayerGuid));
+                if (kv.Value.Entries.Count == 0)
+                {
+                    try { kv.Value.WaitCts.Cancel(); } catch { }
+                    emptyLobbies.Add(kv.Key);
+                }
             }
+            foreach (var k in emptyLobbies) _waitingLobbies.Remove(k);
 
-            // Prune ended active rooms
             var endedRooms = _activeRoomsByMode
                 .Where(kv => !BattleModeRegistry.IsRoomActive(kv.Value.RoomGuid) || !kv.Value.Session.IsConnected)
                 .Select(kv => kv.Key)
                 .ToList();
             foreach (var k in endedRooms) _activeRoomsByMode.Remove(k);
 
-            // 1. Is a real human partner ALREADY waiting in queue for this mode?
-            if (_waitingMatch.TryGetValue(normMode, out var open)
-                && open.Session.IsConnected
-                && open.Session != session)
+            // 1. Join an already-open queue lobby for this mode (collects all players, not just 2!)
+            if (_waitingLobbies.TryGetValue(normMode, out var openLobby)
+                && openLobby.Entries.Count < maxHumansInMode)
             {
-                _waitingMatch.Remove(normMode);
-                try { open.WaitCts?.Cancel(); } catch { }
+                openLobby.Entries.RemoveAll(e => e.PlayerGuid == session.PlayerGUID);
+                var joinEntry = new MatchEntry(session, session.PlayerGUID, tankGuid, openLobby.RoomGuid, mode, normMode, level, myTier, openLobby.WaitCts);
+                openLobby.Entries.Add(joinEntry);
 
-                long sharedRoom = open.RoomGuid;
-                BattleModeRegistry.Record(sharedRoom, open.PlayerGuid, open.WireMode, open.Level);
-                BattleModeRegistry.Record(sharedRoom, session.PlayerGUID, mode, level);
-                BattleModeRegistry.SetExpectedPlayers(sharedRoom, 2);
+                var allTiers = openLobby.Entries.Select(e => e.Tier).ToList();
+                int activeCount = Math.Max(1, _activeRoomsByMode.Count + 1);
+                SendQueueSnapshot(session, mode, myTier, allTiers, activeRoomCount: activeCount, targetHumansForPve: maxHumansInMode);
+                BroadcastLobbyUpdatesLocked(openLobby, activeCount, excludePlayerGuid: session.PlayerGUID);
 
-                _activeRoomsByMode[normMode] = open with { Level = level };
+                Console.WriteLine($"[HS] Joined queue lobby mode={normMode} room={openLobby.RoomGuid}: {openLobby.Entries.Count}/{maxHumansInMode} real players");
 
-                Console.WriteLine($"[HS] Real-player MATCH! Room={sharedRoom} " +
-                    $"P1={open.PlayerGuid} P2={session.PlayerGUID} mode={mode}");
-
-                var realTiers = new[] { open.Tier, myTier };
-                SendQueueSnapshot(open.Session, open.WireMode, open.Tier, realTiers, activeRoomCount: 1, targetHumansForPve: 2);
-                SendQueueSnapshot(session, mode, myTier, realTiers, activeRoomCount: 1, targetHumansForPve: 2);
-
-                var res1 = new PK_HC_JoinRoomRes
+                if (openLobby.Entries.Count >= maxHumansInMode)
                 {
-                    Flag = 1, Certification = open.Session.Certification,
-                    Ip = ResolveRoomServerIp(open.Session), Port = 9601, RoomGUID = sharedRoom,
-                    TankGUID = open.TankGuid, IsObserver = 0
-                };
-                var res2 = new PK_HC_JoinRoomRes
-                {
-                    Flag = 1, Certification = session.Certification,
-                    Ip = ResolveRoomServerIp(session), Port = 9601, RoomGUID = sharedRoom,
-                    TankGUID = tankGuid, IsObserver = 0
-                };
-
-                Task.Run(async () =>
-                {
-                    await Task.Delay(CoopFoundDelayMs);
-                    bool c1, c2;
-                    lock (_matchLock)
+                    _waitingLobbies.Remove(normMode);
+                    try { openLobby.WaitCts.Cancel(); } catch { }
+                    Task.Run(async () =>
                     {
-                        c1 = _queueCancelled.Remove(open.PlayerGuid) || !open.Session.IsConnected;
-                        c2 = _queueCancelled.Remove(session.PlayerGUID) || !session.IsConnected;
-                        if (c1 || c2)
-                        {
-                            // If one player backed out during the 1.5s handoff, let the survivor start alone
-                            BattleModeRegistry.SetExpectedPlayers(sharedRoom, 1);
-                        }
-                    }
-                    if (!c1) try { open.Session.Send(res1); } catch { }
-                    if (!c2) try { session.Send(res2); } catch { }
-                });
+                        await Task.Delay(CoopFoundDelayMs);
+                        LaunchMatchLobby(openLobby);
+                    });
+                }
                 return;
             }
 
-            // 2. Otherwise, is there an active battle already running in this mode? Hot-join same room/map!
+            // old block removed
+
+            // 2. Otherwise, if there is an active battle with free human slots, hot-join it
             if (_activeRoomsByMode.TryGetValue(normMode, out var active)
-                && BattleModeRegistry.IsRoomActive(active.RoomGuid))
+                && BattleModeRegistry.IsRoomActive(active.RoomGuid)
+                && BattleModeRegistry.GetRoomHumanCount(active.RoomGuid) < maxHumansInMode)
             {
                 BattleModeRegistry.Record(active.RoomGuid, session.PlayerGUID, mode, level);
-                int liveHumans = Math.Max(1, BattleModeRegistry.GetRoomHumanCount(active.RoomGuid));
+                int liveHumans = Math.Clamp(BattleModeRegistry.GetRoomHumanCount(active.RoomGuid), 1, maxHumansInMode);
                 var tiers = new List<int>(liveHumans) { myTier };
                 while (tiers.Count < liveHumans) tiers.Add(active.Tier);
 
-                Console.WriteLine($"[HS] Joining active room={active.RoomGuid} (same map) P={session.PlayerGUID} mode={mode}");
+                Console.WriteLine($"[HS] Hot-joining active room={active.RoomGuid} ({liveHumans}/{maxHumansInMode} humans) P={session.PlayerGUID} mode={mode}");
                 SendQueueScreenThenJoin(session, mode, myTier, new PK_HC_JoinRoomRes
                 {
                     Flag = 1, Certification = session.Certification,
@@ -1740,63 +1781,104 @@ public class HallServer : GameServer
                 return;
             }
 
-            // 3. First player in queue for this mode
+            // 3. Open a fresh 20-second matchmaking lobby for this mode
             long roomGuid = Math.Abs(BitConverter.ToInt64(Guid.NewGuid().ToByteArray(), 0));
-            int onlineHumans = CountOnlineHumans();
-            int waitSec = onlineHumans >= 2 ? CoopOnlineWaitSec : QueueScreenSec;
             var cts = new CancellationTokenSource();
+            var lobby = new MatchLobby
+            {
+                RoomGuid = roomGuid,
+                NormMode = normMode,
+                WaitCts  = cts,
+            };
+            var firstEntry = new MatchEntry(session, session.PlayerGUID, tankGuid, roomGuid, mode, normMode, level, myTier, cts);
+            lobby.Entries.Add(firstEntry);
+            _waitingLobbies[normMode] = lobby;
 
-            var newEntry = new MatchEntry(session, session.PlayerGUID, tankGuid, roomGuid, mode, normMode, level, myTier, cts);
-            _waitingMatch[normMode] = newEntry;
-
-            var initialTiers = new[] { myTier };
-            SendQueueSnapshot(session, mode, myTier, initialTiers, activeRoomCount: 1,
-                targetHumansForPve: onlineHumans >= 2 ? 2 : 1);
-
-            Console.WriteLine($"[HS] Queued P1={session.PlayerGUID} mode={mode} norm={normMode} onlineHumans={onlineHumans} waitSec={waitSec} room={roomGuid}");
+            int roomsShown = Math.Max(1, _activeRoomsByMode.Count + 1);
+            SendQueueSnapshot(session, mode, myTier, new[] { myTier }, activeRoomCount: roomsShown, targetHumansForPve: maxHumansInMode);
+            Console.WriteLine($"[HS] Opened {MatchSearchWaitSec}s lobby P1={session.PlayerGUID} mode={mode} norm={normMode} room={roomGuid}");
 
             Task.Run(async () =>
             {
                 try
                 {
-                    await Task.Delay(waitSec * 1000, cts.Token);
+                    await Task.Delay(MatchSearchWaitSec * 1000, cts.Token);
                 }
                 catch (OperationCanceledException)
                 {
-                    return; // Either matched with a partner or cancelled by user
+                    return;
                 }
 
-                bool stillOwned = false;
+                bool shouldLaunch = false;
                 lock (_matchLock)
                 {
-                    if (_waitingMatch.TryGetValue(normMode, out var cur) && ReferenceEquals(cur, newEntry))
+                    if (_waitingLobbies.TryGetValue(normMode, out var cur) && ReferenceEquals(cur, lobby))
                     {
-                        _waitingMatch.Remove(normMode);
-                        if (!_queueCancelled.Remove(newEntry.PlayerGuid) && session.IsConnected)
-                        {
-                            BattleModeRegistry.Record(roomGuid, session.PlayerGUID, mode, level);
-                            BattleModeRegistry.SetExpectedPlayers(roomGuid, 1);
-                            _activeRoomsByMode[normMode] = newEntry with { WaitCts = null };
-                            stillOwned = true;
-                        }
+                        _waitingLobbies.Remove(normMode);
+                        shouldLaunch = true;
                     }
                 }
-
-                if (stillOwned)
-                {
-                    try
-                    {
-                        session.Send(new PK_HC_JoinRoomRes
-                        {
-                            Flag = 1, Certification = session.Certification,
-                            Ip = ResolveRoomServerIp(session), Port = 9601, RoomGUID = roomGuid,
-                            TankGUID = tankGuid, IsObserver = 0
-                        });
-                    }
-                    catch { }
-                }
+                if (shouldLaunch) LaunchMatchLobby(lobby);
             });
         }
+    }
+
+    private void LaunchMatchLobby(MatchLobby lobby)
+    {
+        List<MatchEntry> valid;
+        lock (_matchLock)
+        {
+            valid = lobby.Entries
+                .Where(e => !_queueCancelled.Remove(e.PlayerGuid) && e.Session.IsConnected)
+                .ToList();
+            if (valid.Count == 0) return;
+
+            foreach (var e in valid)
+                BattleModeRegistry.Record(lobby.RoomGuid, e.PlayerGuid, e.WireMode, e.Level);
+
+            BattleModeRegistry.SetExpectedPlayers(lobby.RoomGuid, valid.Count);
+            _activeRoomsByMode[lobby.NormMode] = valid[0] with { WaitCts = null };
+        }
+
+        Console.WriteLine($"[HS] Launching match Room={lobby.RoomGuid} normMode={lobby.NormMode} realPlayers={valid.Count}");
+        foreach (var e in valid)
+        {
+            try
+            {
+                e.Session.Send(new PK_HC_JoinRoomRes
+                {
+                    Flag = 1,
+                    Certification = e.Session.Certification,
+                    Ip = ResolveRoomServerIp(e.Session),
+                    Port = 9601,
+                    RoomGUID = lobby.RoomGuid,
+                    TankGUID = e.TankGuid,
+                    IsObserver = 0
+                });
+            }
+            catch { }
+        }
+    }
+
+    private void RemovePlayerFromWaitingLobbiesLocked(long playerGuid)
+    {
+        _queueCancelled.Add(playerGuid);
+        var toRemove = new List<byte>();
+        foreach (var kv in _waitingLobbies)
+        {
+            int removed = kv.Value.Entries.RemoveAll(e => e.PlayerGuid == playerGuid);
+            if (removed == 0) continue;
+            if (kv.Value.Entries.Count == 0)
+            {
+                try { kv.Value.WaitCts.Cancel(); } catch { }
+                toRemove.Add(kv.Key);
+            }
+            else
+            {
+                BroadcastLobbyUpdatesLocked(kv.Value, Math.Max(1, _activeRoomsByMode.Count + 1));
+            }
+        }
+        foreach (var k in toRemove) _waitingLobbies.Remove(k);
     }
 
     private void SendSinglePlayerBattle(GameSession session, long tankGuid, byte mode, byte level)
@@ -4217,17 +4299,9 @@ public class HallServer : GameServer
 
     private void HandleCancleJoinRoom(GameSession session)
     {
-        // v12: «ВЫХОД» на экране «Подбор команды» — гасим отложенный JoinRoomRes и
-        // снимаем свою запись из матчмейкинга, чтобы комната не осталась висеть.
         lock (_matchLock)
         {
-            _queueCancelled.Add(session.PlayerGUID);
-            var keys = _waitingMatch.Where(kv => kv.Value.Session == session).Select(kv => kv.Key).ToList();
-            foreach (var k in keys)
-            {
-                if (_waitingMatch.Remove(k, out var w))
-                    try { w.WaitCts?.Cancel(); } catch { }
-            }
+            RemovePlayerFromWaitingLobbiesLocked(session.PlayerGUID);
         }
         session.Send(new PK_HC_CancleJoinRoom());
     }
@@ -6084,13 +6158,7 @@ public class HallServer : GameServer
         _hallByGuid.TryRemove(session.PlayerGUID, out _);   // v13
         lock (_matchLock)
         {
-            _queueCancelled.Add(session.PlayerGUID);
-            var keys = _waitingMatch.Where(kv => kv.Value.Session == session).Select(kv => kv.Key).ToList();
-            foreach (var k in keys)
-            {
-                if (_waitingMatch.Remove(k, out var w))
-                    try { w.WaitCts?.Cancel(); } catch { }
-            }
+            RemovePlayerFromWaitingLobbiesLocked(session.PlayerGUID);
         }
     }
 }

@@ -85,11 +85,13 @@ public class TankRepository
 
     public void NormalizePlayerTanks(long playerGuid)
     {
-        var tanks = GetPlayerTanks(playerGuid);
-        if (tanks.Count == 0) return;
+        lock (_db.SyncRoot)
+        {
+            var tanks = GetPlayerTanks(playerGuid);
+            if (tanks.Count == 0) return;
 
-        var existingModules = _moduleRepo?.GetResearchedModuleSet(playerGuid);
-        using var tx = _db.Connection.BeginTransaction();
+            var existingModules = _moduleRepo?.GetResearchedModuleSet(playerGuid);
+            using var tx = _db.Connection.BeginTransaction();
 
         foreach (var tank in tanks)
         {
@@ -186,7 +188,8 @@ public class TankRepository
             _moduleRepo?.ResearchTankBaseModules(playerGuid, tank.VehicleId, hullId, underpanId, turretId, mainGunId, engineId, fuelTankId, cartridgeId, radioId, gaugeId, existingModules, tx);
         }
 
-        tx.Commit();
+            tx.Commit();
+        }
     }
 
     public void UpdateTankEquipment(

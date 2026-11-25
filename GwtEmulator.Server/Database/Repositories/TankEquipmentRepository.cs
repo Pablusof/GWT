@@ -51,30 +51,33 @@ public class TankEquipmentRepository
 
     public void SaveTankEquipment(long tankGuid, IReadOnlyList<int> equipmentIds)
     {
-        using var tx = _db.Connection.BeginTransaction();
-
-        using (var deleteCmd = _db.Connection.CreateCommand())
+        lock (_db.SyncRoot)
         {
-            deleteCmd.Transaction = tx;
-            deleteCmd.CommandText = "DELETE FROM TankEquipment WHERE TankGuid = @guid";
-            deleteCmd.Parameters.AddWithValue("@guid", tankGuid);
-            deleteCmd.ExecuteNonQuery();
-        }
+            using var tx = _db.Connection.BeginTransaction();
 
-        int slotIndex = 0;
-        foreach (int equipmentId in equipmentIds.Where(id => id > 0).Take(36))
-        {
-            using var insertCmd = _db.Connection.CreateCommand();
-            insertCmd.Transaction = tx;
-            insertCmd.CommandText = @"
-                INSERT INTO TankEquipment (TankGuid, SlotIndex, EquipmentId)
-                VALUES (@guid, @slot, @equipmentId)";
-            insertCmd.Parameters.AddWithValue("@guid", tankGuid);
-            insertCmd.Parameters.AddWithValue("@slot", slotIndex++);
-            insertCmd.Parameters.AddWithValue("@equipmentId", equipmentId);
-            insertCmd.ExecuteNonQuery();
-        }
+            using (var deleteCmd = _db.Connection.CreateCommand())
+            {
+                deleteCmd.Transaction = tx;
+                deleteCmd.CommandText = "DELETE FROM TankEquipment WHERE TankGuid = @guid";
+                deleteCmd.Parameters.AddWithValue("@guid", tankGuid);
+                deleteCmd.ExecuteNonQuery();
+            }
 
-        tx.Commit();
+            int slotIndex = 0;
+            foreach (int equipmentId in equipmentIds.Where(id => id > 0).Take(36))
+            {
+                using var insertCmd = _db.Connection.CreateCommand();
+                insertCmd.Transaction = tx;
+                insertCmd.CommandText = @"
+                    INSERT INTO TankEquipment (TankGuid, SlotIndex, EquipmentId)
+                    VALUES (@guid, @slot, @equipmentId)";
+                insertCmd.Parameters.AddWithValue("@guid", tankGuid);
+                insertCmd.Parameters.AddWithValue("@slot", slotIndex++);
+                insertCmd.Parameters.AddWithValue("@equipmentId", equipmentId);
+                insertCmd.ExecuteNonQuery();
+            }
+
+            tx.Commit();
+        }
     }
 }
